@@ -18,4 +18,6 @@ flowchart LR
 | `templates/new` | Default Cloudflare Worker scaffold. |
 | `templates/chat` | Cloudflare Worker scaffold for chat-oriented apps. |
 
-The template directories are copied relative to the SwiftWeb app package root.
+Each template entry in `sweb.json` carries `https://github.com/1amageek/swift-web`
+as its SwiftWeb reference URL. The template directories are copied relative to the
+SwiftWeb app package root.

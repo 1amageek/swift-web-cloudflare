@@ -4,11 +4,13 @@
   "name": "SwiftWeb Cloudflare",
   "templates": {
     "new": {
-      "path": "templates/new"
+      "path": "templates/new",
+      "referenceURL": "https://github.com/1amageek/swift-web"
     },
     "named": {
       "chat": {
-        "path": "templates/chat"
+        "path": "templates/chat",
+        "referenceURL": "https://github.com/1amageek/swift-web"
       }
     }
   },
@@ -18,4 +20,3 @@
     "deploy": false
   }
 }
-
