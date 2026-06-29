@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "cloudflare",
+  "name": "SwiftWeb Cloudflare",
+  "templates": {
+    "new": {
+      "path": "templates/new"
+    },
+    "named": {
+      "chat": {
+        "path": "templates/chat"
+      }
+    }
+  },
+  "capabilities": {
+    "scaffold": true,
+    "build": false,
+    "deploy": false
+  }
+}
+
