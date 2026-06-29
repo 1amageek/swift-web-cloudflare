@@ -5,12 +5,18 @@
   "templates": {
     "new": {
       "path": "templates/new",
-      "referenceURL": "https://github.com/1amageek/swift-web"
+      "reference": {
+        "title": "SwiftWeb",
+        "url": "https://github.com/1amageek/swift-web"
+      }
     },
     "named": {
       "chat": {
         "path": "templates/chat",
-        "referenceURL": "https://github.com/1amageek/swift-web"
+        "reference": {
+          "title": "SwiftWeb",
+          "url": "https://github.com/1amageek/swift-web"
+        }
       }
     }
   },
