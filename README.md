@@ -38,3 +38,21 @@ Working reference: `EdgeActorSpike/jskit-async/worker`.
 
 `Package.swift` references swift-web by local path (`../swift-web`) while both
 evolve together — switch to the released URL before tagging.
+
+## Templates
+
+`Templates/` holds the deployable worker set the package generation will emit
+(usable manually today):
+
+- `worker/src/index.ts` — the stateless Worker routes
+  `POST /_swiftweb/actors/invoke` by the envelope's `recipientID`
+  (`"<contract>:<name>"`) to a per-identity `SwiftWebActorDO` via
+  `idFromName`, and the DO dispatches on the Swift actor runtime. Same path
+  the browser fetch transport already uses.
+- `worker/wrangler.jsonc`, `worker/package.json`, `worker/src/runtime.mjs`
+  (PackageToJS SwiftRuntime).
+- `AppDurableObjectLauncher.swift` — the wasm entry exports
+  (`swiftwebStart`/`swiftwebInvoke`).
+
+Verified end-to-end in workerd: raw envelope POST → Worker routing →
+per-identity DO → activation → state across calls (5 → 10).

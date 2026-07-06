@@ -1,0 +1,127 @@
+// SwiftWeb Cloudflare worker: routes actor invocations to per-identity
+// Durable Objects hosting the app's Swift/WASM actor runtime.
+//
+// JS here is a no-interpretation trampoline: envelopes are opaque strings,
+// dispatched by the Swift side (SwiftWebCloudflareHost).
+import { WASI, File, OpenFile, ConsoleStdout } from "@bjorn3/browser_wasi_shim";
+// @ts-ignore
+import { SwiftRuntime } from "./runtime.mjs";
+import wasmModule from "./app.wasm";
+
+const INVOKE_PATH = "/_swiftweb/actors/invoke";
+
+async function instantiate(): Promise<any> {
+  const fds = [
+    new OpenFile(new File([])),
+    ConsoleStdout.lineBuffered((m: string) => console.log("[wasm]", m)),
+    ConsoleStdout.lineBuffered((m: string) => console.log("[wasm:err]", m)),
+  ];
+  const wasi = new WASI([], [], fds);
+  const swift = new SwiftRuntime();
+  // BridgeJS import stubs: required to instantiate, never called.
+  const bjs: Record<string, Function> = {};
+  for (const imp of WebAssembly.Module.imports(wasmModule as any)) {
+    if (imp.module === "bjs") {
+      bjs[imp.name] = () => {
+        throw new Error(`Unexpected call to BridgeJS function: ${imp.name}`);
+      };
+    }
+  }
+  const instance: any = await WebAssembly.instantiate(wasmModule as any, {
+    wasi_snapshot_preview1: wasi.wasiImport,
+    javascript_kit: swift.wasmImports,
+    bjs,
+  });
+  swift.setInstance(instance);
+  wasi.initialize(instance); // reactor: runs _initialize
+  return instance;
+}
+
+const pending = new Map<string, { resolve: (json: string) => void; reject: (error: Error) => void }>();
+
+function installProtocolGlobals(readyResolve: () => void, readyReject: (error: Error) => void) {
+  (globalThis as any).swiftwebReady = () => readyResolve();
+  (globalThis as any).swiftwebFailed = (message: string) => readyReject(new Error(message));
+  (globalThis as any).swiftwebComplete = (callID: string, json: string) => {
+    pending.get(callID)?.resolve(json);
+    pending.delete(callID);
+  };
+  (globalThis as any).swiftwebInvokeFailed = (callID: string, message: string) => {
+    pending.get(callID)?.reject(new Error(message));
+    pending.delete(callID);
+  };
+}
+
+function invoke(instance: any, envelopeJSON: string): Promise<string> {
+  const callID = JSON.parse(envelopeJSON).callID as string;
+  return new Promise((resolve, reject) => {
+    pending.set(callID, { resolve, reject });
+    (globalThis as any).__swiftwebEnvelope = envelopeJSON;
+    instance.exports.swiftwebInvoke();
+  });
+}
+
+/// One Durable Object per actor identity: the Worker routes each
+/// recipientID ("<contract>:<name>") to its own DO via idFromName, so the
+/// activated actor's state lives exactly one place.
+export class SwiftWebActorDO {
+  private ready: Promise<void> | undefined;
+  private instance: any;
+
+  constructor(_state: any) {}
+
+  private async ensureStarted(): Promise<void> {
+    if (!this.ready) {
+      this.ready = (async () => {
+        this.instance = await instantiate();
+        await new Promise<void>((resolve, reject) => {
+          installProtocolGlobals(resolve, reject);
+          this.instance.exports.swiftwebStart();
+        });
+      })();
+    }
+    return this.ready;
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    try {
+      await this.ensureStarted();
+      const envelopeJSON = await request.text();
+      const responseJSON = await invoke(this.instance, envelopeJSON);
+      return new Response(responseJSON, {
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    } catch (error) {
+      return new Response(
+        JSON.stringify({ error: true, reason: String(error) }),
+        { status: 500, headers: { "content-type": "application/json; charset=utf-8" } }
+      );
+    }
+  }
+}
+
+export default {
+  async fetch(request: Request, env: any): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === INVOKE_PATH && request.method === "POST") {
+      const envelopeJSON = await request.text();
+      let recipientID: string;
+      try {
+        recipientID = JSON.parse(envelopeJSON).recipientID;
+        if (typeof recipientID !== "string" || recipientID.length === 0) {
+          throw new Error("recipientID missing");
+        }
+      } catch (error) {
+        return new Response(
+          JSON.stringify({ error: true, reason: `invalid invocation envelope: ${String(error)}` }),
+          { status: 400, headers: { "content-type": "application/json; charset=utf-8" } }
+        );
+      }
+      const id = env.SWIFTWEB_ACTOR.idFromName(recipientID);
+      return env.SWIFTWEB_ACTOR.get(id).fetch(
+        new Request(request.url, { method: "POST", body: envelopeJSON })
+      );
+    }
+    return new Response("Not Found", { status: 404 });
+  },
+};
