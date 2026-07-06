@@ -14,6 +14,7 @@ let package = Package(
     ],
     products: [
         .library(name: "SwiftWebCloudflareHost", targets: ["SwiftWebCloudflareHost"]),
+        .executable(name: "swiftweb-cloudflare", targets: ["swiftweb-cloudflare"]),
     ],
     dependencies: [
         // Switch to the URL + version once swift-web is tagged.
@@ -21,13 +22,23 @@ let package = Package(
         .package(url: "https://github.com/1amageek/JavaScriptKit.git", from: "0.57.0"),
     ],
     targets: [
+        .executableTarget(
+            name: "swiftweb-cloudflare",
+            resources: [
+                .copy("Templates"),
+            ]
+        ),
         .target(
             name: "SwiftWebCloudflareHost",
             dependencies: [
                 .product(name: "SwiftWebActors", package: "swift-web"),
                 .product(name: "SwiftWebCore", package: "swift-web"),
                 .product(name: "JavaScriptKit", package: "JavaScriptKit"),
-                .product(name: "JavaScriptEventLoop", package: "JavaScriptKit"),
+                .product(
+                    name: "JavaScriptEventLoop",
+                    package: "JavaScriptKit",
+                    condition: .when(platforms: [.wasi])
+                ),
             ]
         ),
     ]

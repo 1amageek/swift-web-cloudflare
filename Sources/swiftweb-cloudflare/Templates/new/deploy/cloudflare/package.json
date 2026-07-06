@@ -7,10 +7,12 @@
     "deploy": "wrangler deploy --config wrangler.toml",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@bjorn3/browser_wasi_shim": "^0.3.0"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "latest",
     "typescript": "latest",
     "wrangler": "latest"
   }
 }
-

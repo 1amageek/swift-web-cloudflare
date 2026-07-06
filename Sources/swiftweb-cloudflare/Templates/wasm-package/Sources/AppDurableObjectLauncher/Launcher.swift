@@ -1,12 +1,10 @@
-// The wasm entry for the SwiftWeb Durable Object package. Replace `MyApp`
-// with the app type; the two exports are the contract the worker template
-// (`Templates/worker/src/index.ts`) drives.
 import SwiftWebCloudflareHost
+import {{app.name}}
 
 @_expose(wasm, "swiftwebStart")
 @_cdecl("swiftwebStart")
 func swiftwebStart() {
-    CloudflareActorHost.start(MyApp.self)
+    CloudflareActorHost.start({{app.name}}.self)
 }
 
 @_expose(wasm, "swiftwebInvoke")

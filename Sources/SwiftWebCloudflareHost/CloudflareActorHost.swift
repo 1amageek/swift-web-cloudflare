@@ -4,7 +4,9 @@ import FoundationEssentials
 #else
 import Foundation
 #endif
+#if canImport(JavaScriptEventLoop)
 import JavaScriptEventLoop
+#endif
 import JavaScriptKit
 import SwiftWebActors
 import SwiftWebCore
@@ -38,7 +40,9 @@ public enum CloudflareActorHost {
             return first
         }
         if installExecutor {
+            #if canImport(JavaScriptEventLoop)
             JavaScriptEventLoop.installGlobalExecutor()
+            #endif
         }
 
         Task {

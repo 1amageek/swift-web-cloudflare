@@ -6,9 +6,21 @@
 import { WASI, File, OpenFile, ConsoleStdout } from "@bjorn3/browser_wasi_shim";
 // @ts-ignore
 import { SwiftRuntime } from "./runtime.mjs";
+// @ts-ignore
 import wasmModule from "./app.wasm";
 
+export interface Env {
+  SWIFTWEB_ACTOR: DurableObjectNamespace;
+}
+
 const INVOKE_PATH = "/_swiftweb/actors/invoke";
+
+function errorResponse(reason: string, status: number): Response {
+  return new Response(JSON.stringify({ error: true, reason }), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
 
 async function instantiate(): Promise<any> {
   const fds = [
@@ -63,12 +75,12 @@ function invoke(instance: any, envelopeJSON: string): Promise<string> {
 
 /// One Durable Object per actor identity: the Worker routes each
 /// recipientID ("<contract>:<name>") to its own DO via idFromName, so the
-/// activated actor's state lives exactly one place.
+/// activated actor's state lives in exactly one place.
 export class SwiftWebActorDO {
   private ready: Promise<void> | undefined;
   private instance: any;
 
-  constructor(_state: any) {}
+  constructor(_state: DurableObjectState) {}
 
   private async ensureStarted(): Promise<void> {
     if (!this.ready) {
@@ -92,17 +104,21 @@ export class SwiftWebActorDO {
         headers: { "content-type": "application/json; charset=utf-8" },
       });
     } catch (error) {
-      return new Response(
-        JSON.stringify({ error: true, reason: String(error) }),
-        { status: 500, headers: { "content-type": "application/json; charset=utf-8" } }
-      );
+      return errorResponse(String(error), 500);
     }
   }
 }
 
 export default {
-  async fetch(request: Request, env: any): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname === "/__swiftweb/health") {
+      return new Response("ok", {
+        headers: { "content-type": "text/plain; charset=utf-8" },
+      });
+    }
+
     if (url.pathname === INVOKE_PATH && request.method === "POST") {
       const envelopeJSON = await request.text();
       let recipientID: string;
@@ -112,16 +128,14 @@ export default {
           throw new Error("recipientID missing");
         }
       } catch (error) {
-        return new Response(
-          JSON.stringify({ error: true, reason: `invalid invocation envelope: ${String(error)}` }),
-          { status: 400, headers: { "content-type": "application/json; charset=utf-8" } }
-        );
+        return errorResponse(`invalid invocation envelope: ${String(error)}`, 400);
       }
       const id = env.SWIFTWEB_ACTOR.idFromName(recipientID);
       return env.SWIFTWEB_ACTOR.get(id).fetch(
         new Request(request.url, { method: "POST", body: envelopeJSON })
       );
     }
-    return new Response("Not Found", { status: 404 });
+
+    return errorResponse("Not Found", 404);
   },
 };

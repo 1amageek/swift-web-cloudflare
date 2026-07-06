@@ -1,0 +1,20 @@
+name = "{{app.kebabName}}"
+main = "src/index.ts"
+compatibility_date = "2026-06-29"
+workers_dev = true
+
+[vars]
+SWIFTWEB_PLATFORM = "cloudflare"
+SWIFTWEB_TEMPLATE = "new"
+
+[[durable_objects.bindings]]
+name = "SWIFTWEB_ACTOR"
+class_name = "SwiftWebActorDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SwiftWebActorDO"]
+
+[[rules]]
+type = "CompiledWasm"
+globs = ["**/*.wasm"]
