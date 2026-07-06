@@ -1,0 +1,34 @@
+// swift-tools-version: 6.3
+
+import PackageDescription
+
+// WASM builds resolve swift-web with SWIFTWEB_CORE_ONLY=1 (the 6.3.1 wasm
+// toolchain cannot resolve swift-web's full manifest, and core-only keeps
+// macros/swift-syntax out of the wasm graph):
+//   SWIFTWEB_CORE_ONLY=1 swift build --swift-sdk swift-6.3.1-RELEASE_wasm -c release \
+//     -Xswiftc -Osize -Xswiftc -Xclang-linker -Xswiftc -mexec-model=reactor
+let package = Package(
+    name: "swift-web-cloudflare",
+    platforms: [
+        .macOS("26.2"),
+    ],
+    products: [
+        .library(name: "SwiftWebCloudflareHost", targets: ["SwiftWebCloudflareHost"]),
+    ],
+    dependencies: [
+        // Switch to the URL + version once swift-web is tagged.
+        .package(path: "../swift-web"),
+        .package(url: "https://github.com/1amageek/JavaScriptKit.git", from: "0.57.0"),
+    ],
+    targets: [
+        .target(
+            name: "SwiftWebCloudflareHost",
+            dependencies: [
+                .product(name: "SwiftWebActors", package: "swift-web"),
+                .product(name: "SwiftWebCore", package: "swift-web"),
+                .product(name: "JavaScriptKit", package: "JavaScriptKit"),
+                .product(name: "JavaScriptEventLoop", package: "JavaScriptKit"),
+            ]
+        ),
+    ]
+)

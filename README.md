@@ -1,23 +1,40 @@
-# SwiftWeb Cloudflare
+# swift-web-cloudflare
 
-Cloudflare platform templates for SwiftWeb.
+The Cloudflare host adapter for [swift-web](https://github.com/1amageek/swift-web):
+runs an app's `ActorGroup` distributed actors inside Durable Objects on the
+real `WebActorSystem`, with Swift concurrency driven by JavaScriptKit's event
+loop (async model A — verified in workerd).
 
-This repository is referenced by `sweb --platform cloudflare` and by explicit
-GitHub references such as `sweb --platform 1amageek/swift-web-cloudflare/chat`.
+```swift
+import SwiftWebCloudflareHost
 
-```mermaid
-flowchart LR
-  A["sweb --platform cloudflare/chat"] --> B["sweb.json"]
-  B --> C["templates/chat"]
-  C --> D["deploy/cloudflare"]
+// Generated wasm entry (reactor model):
+@_expose(wasm, "swiftwebStart")
+@_cdecl("swiftwebStart")
+func swiftwebStart() { CloudflareActorHost.start(MyApp.self) }
+
+@_expose(wasm, "swiftwebInvoke")
+@_cdecl("swiftwebInvoke")
+func swiftwebInvoke() { CloudflareActorHost.invokePendingEnvelope() }
 ```
 
-| Path | Purpose |
-|---|---|
-| `sweb.json` | Adapter template manifest consumed by `sweb`. |
-| `templates/new` | Default Cloudflare Worker scaffold. |
-| `templates/chat` | Cloudflare Worker scaffold for chat-oriented apps. |
+JS protocol (strings only; JS is a no-interpretation trampoline):
+`swiftwebReady()/swiftwebFailed(msg)` after start; JS sets
+`globalThis.__swiftwebEnvelope` and calls the invoke export;
+`swiftwebComplete(callID, json)` / `swiftwebInvokeFailed(callID, msg)` return
+results. No JSClosure (JSClosure traps in workerd), no manual wasm memory.
 
-Each template entry in `sweb.json` carries a [SwiftWeb](https://github.com/1amageek/swift-web)
-reference link. Generated deploy README files include the same link. The template
-directories are copied relative to the SwiftWeb app package root.
+## Building for the Durable Object
+
+```
+SWIFTWEB_CORE_ONLY=1 swift build --swift-sdk swift-6.3.1-RELEASE_wasm -c release \
+  -Xswiftc -Osize -Xswiftc -Xclang-linker -Xswiftc -mexec-model=reactor
+```
+
+Instantiate with three import modules: `wasi_snapshot_preview1`
+(browser_wasi_shim), `javascript_kit: swift.wasmImports` (PackageToJS
+runtime.mjs), and `bjs` stubs generated from `WebAssembly.Module.imports`.
+Working reference: `EdgeActorSpike/jskit-async/worker`.
+
+`Package.swift` references swift-web by local path (`../swift-web`) while both
+evolve together — switch to the released URL before tagging.
