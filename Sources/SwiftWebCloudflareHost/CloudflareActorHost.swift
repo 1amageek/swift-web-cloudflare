@@ -29,9 +29,11 @@ public enum CloudflareActorHost {
     private struct State: Sendable {
         var system: WebActorSystem?
         var executorInstalled = false
+        var sockets: [Int: WebSocketActorTransport] = [:]
     }
 
     private static let state = Mutex(State())
+    private static let sessions = WebSocketSessionRouter()
 
     public static func start<Definition: App>(_ definitionType: Definition.Type) {
         let installExecutor = state.withLock { state in
@@ -55,6 +57,7 @@ public enum CloudflareActorHost {
                     definition.body,
                     in: .root(application, actorSystem: system)
                 )
+                system.setTransport(sessions)
                 state.withLock { $0.system = system }
 
                 _ = JSObject.global.swiftwebReady.function?()
@@ -105,6 +108,51 @@ public enum CloudflareActorHost {
                 )
             }
         }
+    }
+
+    // MARK: - WebSocket sessions
+    //
+    // JS drives these through exports after placing the socket ID (and frame)
+    // in the __swiftwebSocketID/__swiftwebSocketFrame globals; Swift sends
+    // frames back by calling the swiftwebSocketSend(id, text) JS global.
+
+    public static func socketOpened() {
+        guard let id = JSObject.global.__swiftwebSocketID.number.map(Int.init) else {
+            return
+        }
+        let transport = WebSocketActorTransport { text in
+            _ = JSObject.global.swiftwebSocketSend.function?(
+                JSValue.number(Double(id)),
+                JSValue.string(text)
+            )
+        }
+        if let system = state.withLock({ $0.system }) {
+            transport.bind(system)
+        }
+        transport.onInboundSender { peerID, transport in
+            sessions.register(peerID, transport: transport)
+        }
+        state.withLock { $0.sockets[id] = transport }
+    }
+
+    public static func socketMessage() {
+        guard let id = JSObject.global.__swiftwebSocketID.number.map(Int.init),
+              let frame = JSObject.global.__swiftwebSocketFrame.string else {
+            return
+        }
+        state.withLock { $0.sockets[id] }?.receive(frame)
+    }
+
+    public static func socketClosed() {
+        guard let id = JSObject.global.__swiftwebSocketID.number.map(Int.init) else {
+            return
+        }
+        let transport = state.withLock { $0.sockets.removeValue(forKey: id) }
+        guard let transport else {
+            return
+        }
+        sessions.unregister(transport: transport)
+        transport.closed()
     }
 
     private static func callID(in envelopeJSON: String) -> String? {

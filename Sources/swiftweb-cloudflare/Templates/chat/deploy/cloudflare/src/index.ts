@@ -15,6 +15,15 @@ export interface Env {
 
 const INVOKE_PATH = "/_swiftweb/actors/invoke";
 
+const WS_PATH = "/_swiftweb/actors/ws";
+
+let nextSocketID = 1;
+const sockets = new Map<number, WebSocket>();
+(globalThis as any).swiftwebSocketSend = (id: number, text: string) => {
+  sockets.get(id)?.send(text);
+};
+
+
 function errorResponse(reason: string, status: number): Response {
   return new Response(JSON.stringify({ error: true, reason }), {
     status,
@@ -96,6 +105,30 @@ export class SwiftWebActorDO {
   }
 
   async fetch(request: Request): Promise<Response> {
+    // WebSocket session: frames are Envelopes, dispatched by the Swift side.
+    if (request.headers.get("Upgrade") === "websocket") {
+      await this.ensureStarted();
+      const pair = new WebSocketPair();
+      const client = pair[0];
+      const server = pair[1];
+      server.accept();
+      const id = nextSocketID++;
+      sockets.set(id, server);
+      (globalThis as any).__swiftwebSocketID = id;
+      this.instance.exports.swiftwebSocketOpened();
+      server.addEventListener("message", (event: MessageEvent) => {
+        (globalThis as any).__swiftwebSocketID = id;
+        (globalThis as any).__swiftwebSocketFrame = String(event.data);
+        this.instance.exports.swiftwebSocketMessage();
+      });
+      server.addEventListener("close", () => {
+        (globalThis as any).__swiftwebSocketID = id;
+        this.instance.exports.swiftwebSocketClosed();
+        sockets.delete(id);
+      });
+      return new Response(null, { status: 101, webSocket: client });
+    }
+
     try {
       await this.ensureStarted();
       const envelopeJSON = await request.text();
@@ -117,6 +150,15 @@ export default {
       return new Response("ok", {
         headers: { "content-type": "text/plain; charset=utf-8" },
       });
+    }
+
+    if (url.pathname === WS_PATH) {
+      const actor = url.searchParams.get("actor");
+      if (request.headers.get("Upgrade") !== "websocket" || !actor) {
+        return errorResponse("expected a WebSocket upgrade with ?actor=<recipientID>", 400);
+      }
+      const id = env.SWIFTWEB_ACTOR.idFromName(actor);
+      return env.SWIFTWEB_ACTOR.get(id).fetch(request);
     }
 
     if (url.pathname === INVOKE_PATH && request.method === "POST") {
