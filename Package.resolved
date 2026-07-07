@@ -1,12 +1,13 @@
 {
-  "originHash" : "b973bcf4e2080fffecbcac7ee238d2931c692550c801c7fc7c6d719ab8b31750",
+  "originHash" : "632c0e991e6a70cdf938a259385f11edc6e0b23a69078dfcd490f9d94ca67639",
   "pins" : [
     {
       "identity" : "async-http-client",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swift-server/async-http-client.git",
       "state" : {
-        "revision" : "393104434ea57710f2469036e816672fe15e8212"
+        "revision" : "4603a8036d921ea999fadb742931546c341f4bd7",
+        "version" : "1.35.0"
       }
     },
     {
@@ -50,7 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-async-algorithms.git",
       "state" : {
-        "revision" : "3bd2de010e30f8d41481e6c7a49a7e7222a878cf"
+        "revision" : "3da39bbc4e687d4192af7c9cf4eab805745a0b9c",
+        "version" : "1.1.5"
       }
     },
     {
@@ -112,8 +114,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/swift-html.git",
       "state" : {
-        "revision" : "5668b421d5e2aca0a0308b1a7de12b38a7e7ca0e",
-        "version" : "0.9.1"
+        "revision" : "73879ae3a9e25bf592dcf0b07a5e99e92e519ed2",
+        "version" : "0.9.2"
       }
     },
     {
@@ -121,7 +123,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-http-api-proposal.git",
       "state" : {
-        "revision" : "d58fd6fa157e08bff44aa360ff83ebd424783392"
+        "revision" : "638af2b908d8109857389689d361e1f45f6617ea",
+        "version" : "0.2.0"
       }
     },
     {
@@ -129,7 +132,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swift-server/swift-http-server",
       "state" : {
-        "revision" : "b1c4f775dfbdc74800c0f29fda79c8984a5e9073"
+        "revision" : "c571f7635f63ca6c9f5a1d682d5757c980c246d6",
+        "version" : "0.1.0"
       }
     },
     {
@@ -247,6 +251,15 @@
       "state" : {
         "revision" : "7502b711c92a17741fa625d722b0ccbd595d8ed1",
         "version" : "1.7.2"
+      }
+    },
+    {
+      "identity" : "swift-web",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/1amageek/swift-web.git",
+      "state" : {
+        "revision" : "13742f781566f05068a947421beac23186ae2399",
+        "version" : "0.2.1"
       }
     }
   ],

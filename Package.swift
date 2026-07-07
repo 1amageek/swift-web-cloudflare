@@ -18,7 +18,7 @@ let package = Package(
     ],
     dependencies: [
         // Switch to the URL + version once swift-web is tagged.
-        .package(path: "../swift-web"),
+        .package(url: "https://github.com/1amageek/swift-web.git", exact: "0.2.1"),
         .package(url: "https://github.com/1amageek/JavaScriptKit.git", from: "0.57.0"),
     ],
     targets: [
