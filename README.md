@@ -24,35 +24,43 @@ JS protocol (strings only; JS is a no-interpretation trampoline):
 `swiftwebComplete(callID, json)` / `swiftwebInvokeFailed(callID, msg)` return
 results. No JSClosure (JSClosure traps in workerd), no manual wasm memory.
 
-## Building for the Durable Object
+## Installation
+
+Released as `0.1.0`, depending on the released swift-web (`exact: "0.2.1"`):
+
+```swift
+.package(url: "https://github.com/1amageek/swift-web-cloudflare.git", from: "0.1.0"),
+```
+
+## Scaffolding a deploy
+
+The `swiftweb-cloudflare` CLI materializes the deploy layout into an app:
 
 ```
-SWIFTWEB_CORE_ONLY=1 swift build --swift-sdk swift-6.3.1-RELEASE_wasm -c release \
+swift run swiftweb-cloudflare install --app MyApp
+```
+
+This writes `deploy/cloudflare` (Worker + wrangler.toml + JS trampoline) and
+`deploy/wasm` (the generated launcher package + `build.sh`). The Worker routes
+`POST /_swiftweb/actors/invoke` by the envelope's `recipientID`
+(`"<contract>:<name>"`) to a per-identity `SwiftWebActorDO` via `idFromName`,
+and upgrades `GET /_swiftweb/actors/ws?actor=…` to a WebSocket on the same DO
+for bidirectional actor messaging (server → client push included).
+
+## Building for the Durable Object
+
+`deploy/wasm/build.sh` runs the DO build and optimization:
+
+```
+SWIFTWEB_DO=1 swift build --swift-sdk swift-6.3.1-RELEASE_wasm -c release \
   -Xswiftc -Osize -Xswiftc -Xclang-linker -Xswiftc -mexec-model=reactor
+npx --yes wasm-opt -Oz --strip-debug -o app.wasm <built>.wasm
 ```
 
 Instantiate with three import modules: `wasi_snapshot_preview1`
 (browser_wasi_shim), `javascript_kit: swift.wasmImports` (PackageToJS
 runtime.mjs), and `bjs` stubs generated from `WebAssembly.Module.imports`.
-Working reference: `EdgeActorSpike/jskit-async/worker`.
 
-`Package.swift` references swift-web by local path (`../swift-web`) while both
-evolve together — switch to the released URL before tagging.
-
-## Templates
-
-`Templates/` holds the deployable worker set the package generation will emit
-(usable manually today):
-
-- `worker/src/index.ts` — the stateless Worker routes
-  `POST /_swiftweb/actors/invoke` by the envelope's `recipientID`
-  (`"<contract>:<name>"`) to a per-identity `SwiftWebActorDO` via
-  `idFromName`, and the DO dispatches on the Swift actor runtime. Same path
-  the browser fetch transport already uses.
-- `worker/wrangler.jsonc`, `worker/package.json`, `worker/src/runtime.mjs`
-  (PackageToJS SwiftRuntime).
-- `AppDurableObjectLauncher.swift` — the wasm entry exports
-  (`swiftwebStart`/`swiftwebInvoke`).
-
-Verified end-to-end in workerd: raw envelope POST → Worker routing →
-per-identity DO → activation → state across calls (5 → 10).
+Verified end-to-end in workerd: envelope POST → Worker routing →
+per-identity DO → activation → state across calls, and WebSocket sessions
+with agent → observer pushes over one duplex channel.
