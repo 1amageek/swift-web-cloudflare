@@ -6,6 +6,12 @@ workers_dev = true
 [vars]
 SWIFTWEB_PLATFORM = "cloudflare"
 SWIFTWEB_TEMPLATE = "chat"
+# Edge auth (WS-9): set a Firebase project ID to require verified ID tokens on
+# every actor invocation. Leave unset to disable edge verification — the DO's
+# actor policy is then the only gate (and denies external RPC by default).
+# SWIFTWEB_AUTH_PROJECT_ID = "your-firebase-project-id"
+# Point at the Firebase Auth emulator to accept its unsigned tokens locally:
+# SWIFTWEB_AUTH_EMULATOR_HOST = "127.0.0.1:9099"
 
 [[durable_objects.bindings]]
 name = "SWIFTWEB_ACTOR"

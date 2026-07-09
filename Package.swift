@@ -17,8 +17,11 @@ let package = Package(
         .executable(name: "swiftweb-cloudflare", targets: ["swiftweb-cloudflare"]),
     ],
     dependencies: [
-        // Switch to the URL + version once swift-web is tagged.
-        .package(url: "https://github.com/1amageek/swift-web.git", exact: "0.2.1"),
+        // Local path during development: the edge authorization seam (the
+        // authorized WebActorSystem.invoke overload, WebActorSecurityPolicy)
+        // landed after swift-web 0.2.1. Switch back to the URL + a tag that
+        // includes it before tagging swift-web-cloudflare.
+        .package(path: "../swift-web"),
         .package(url: "https://github.com/1amageek/JavaScriptKit.git", from: "0.57.0"),
     ],
     targets: [
