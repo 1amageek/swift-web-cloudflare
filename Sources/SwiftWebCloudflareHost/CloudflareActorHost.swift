@@ -50,6 +50,9 @@ public enum CloudflareActorHost {
         // below suspends: a concurrent DO cold-start in the same isolate can
         // overwrite `__swiftwebStartID` while this one is lowering scenes.
         let startID = JSObject.global.__swiftwebStartID.number.map(Int.init)
+        // The DO's storage token, captured now for the same reason. Identifies
+        // this DO's SQLite when several DOs share one isolate.
+        let storageToken = JSObject.global.__swiftwebStorageToken.number
 
         let installExecutor = state.withLock { state in
             let first = !state.executorInstalled
@@ -73,6 +76,9 @@ public enum CloudflareActorHost {
                     in: .root(application, actorSystem: system)
                 )
                 system.setTransport(sessions)
+                if let storageToken {
+                    system.setPersistentStore(DurableObjectActorStateStore(token: storageToken))
+                }
                 state.withLock {
                     $0.system = system
                     $0.actorSecurity = definition.security.actors
@@ -248,4 +254,5 @@ public enum CloudflareActorHost {
 
 enum CloudflareHostError: Error {
     case notReady
+    case storageDecodeFailed(String)
 }

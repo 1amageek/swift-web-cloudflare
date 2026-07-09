@@ -28,6 +28,11 @@ const PRINCIPAL_HEADER = "X-SwiftWeb-Principal";
 let nextSocketID = 1;
 const sockets = new Map<number, WebSocket>();
 
+// Each Durable Object registers its own SQLite storage under a token; @ActorStorage
+// load/save carry the token so the right DO's storage is used across an isolate.
+let nextStorageToken = 1;
+const storageByToken = new Map<number, DurableObjectStorage>();
+
 // The app's security.actors policy rejected this invocation. The Worker maps
 // it to HTTP 403, matching the native host-neutral actor endpoint.
 class ActorInvocationDenied extends Error {}
@@ -62,6 +67,24 @@ const pending = new Map<string, { resolve: (json: string) => void; reject: (erro
 (globalThis as any).swiftwebInvokeFailed = (callID: string, message: string) => {
   pending.get(callID)?.reject(new Error(message));
   pending.delete(callID);
+};
+// @ActorStorage grain-state persistence, backed by this DO's SQLite. Synchronous
+// (DO SQLite is synchronous); Swift sets the token, actor ID, and blob globals.
+(globalThis as any).swiftwebStorageLoad = () => {
+  const storage = storageByToken.get((globalThis as any).__swiftwebStorageToken);
+  const id = (globalThis as any).__swiftwebStorageActorID as string;
+  const rows = storage!.sql
+    .exec("SELECT blob FROM swiftweb_actor_state WHERE id = ?", id)
+    .toArray();
+  (globalThis as any).__swiftwebStorageResult = rows.length ? (rows[0].blob as string) : "";
+};
+(globalThis as any).swiftwebStorageSave = () => {
+  const storage = storageByToken.get((globalThis as any).__swiftwebStorageToken);
+  storage!.sql.exec(
+    "INSERT OR REPLACE INTO swiftweb_actor_state (id, blob) VALUES (?, ?)",
+    (globalThis as any).__swiftwebStorageActorID as string,
+    (globalThis as any).__swiftwebStorageBlob as string
+  );
 };
 
 function errorResponse(reason: string, status: number): Response {
@@ -171,13 +194,24 @@ function withPrincipal(request: Request, uid: string | null): Request {
 export class SwiftWebActorDO {
   private ready: Promise<void> | undefined;
   private instance: any;
+  private ctx: DurableObjectState;
+  private storageToken: number | undefined;
 
-  constructor(_state: DurableObjectState) {}
+  constructor(state: DurableObjectState) {
+    this.ctx = state;
+  }
 
   private async ensureStarted(): Promise<void> {
     if (!this.ready) {
       this.ready = (async () => {
         this.instance = await instantiate();
+        this.storageToken = nextStorageToken++;
+        storageByToken.set(this.storageToken, this.ctx.storage);
+        this.ctx.storage.sql.exec(
+          "CREATE TABLE IF NOT EXISTS swiftweb_actor_state (id TEXT PRIMARY KEY, blob TEXT)"
+        );
+        // Captured synchronously by CloudflareActorHost.start before it suspends.
+        (globalThis as any).__swiftwebStorageToken = this.storageToken;
         await start(this.instance);
       })();
     }

@@ -17,6 +17,27 @@ npm run dev
 npm run deploy
 ```
 
+## Durable actor state (`@ActorStorage`)
+
+An actor's own state lives in wasm memory and is lost when the Durable Object is
+evicted or hibernated. Mark a stored property `@ActorStorage` to make it durable —
+the actor system loads it from this DO's SQLite when the actor activates and saves
+it after each invocation:
+
+```swift
+distributed actor Counter {
+    @ActorStorage("count") var count = 0        // survives eviction
+    distributed func increment() { count += 1 } // written like a normal property
+}
+```
+
+- State is one row per actor ID in the DO's own SQLite (`new_sqlite_classes` in
+  `wrangler.toml` already makes this DO SQLite-backed), so it is colocated with the
+  actor — no network hop.
+- Use `@ActorStorage` for the actor's **own small state** (counters, settings,
+  cursors). For queryable domain data (searched, related, unbounded), use a database
+  instead; `@ActorStorage` is the lightweight grain-state layer, not a query engine.
+
 ## Securing actor RPC
 
 Edge invocations are **external**, so they run under the app's
