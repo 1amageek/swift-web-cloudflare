@@ -17,11 +17,9 @@ let package = Package(
         .executable(name: "swiftweb-cloudflare", targets: ["swiftweb-cloudflare"]),
     ],
     dependencies: [
-        // Local path during development: the edge authorization seam (the
-        // authorized WebActorSystem.invoke overload, WebActorSecurityPolicy)
-        // landed after swift-web 0.2.1. Switch back to the URL + a tag that
-        // includes it before tagging swift-web-cloudflare.
-        .package(path: "../swift-web"),
+        // swift-web 0.3.0 carries the edge authorization seam, @ActorStorage
+        // persistence, and the SwiftWebHost rename this adapter depends on.
+        .package(url: "https://github.com/1amageek/swift-web.git", from: "0.3.0"),
         .package(url: "https://github.com/1amageek/JavaScriptKit.git", from: "0.57.0"),
     ],
     targets: [
