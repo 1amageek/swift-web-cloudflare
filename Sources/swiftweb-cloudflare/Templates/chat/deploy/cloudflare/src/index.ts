@@ -196,6 +196,8 @@ export class SwiftWebActorDO {
   private instance: any;
   private ctx: DurableObjectState;
   private storageToken: number | undefined;
+  // Sockets this (possibly hibernation-woken) instance has opened in Swift.
+  private openedSockets = new Map<WebSocket, number>();
 
   constructor(state: DurableObjectState) {
     this.ctx = state;
@@ -218,30 +220,60 @@ export class SwiftWebActorDO {
     return this.ready;
   }
 
+  // Opens a socket in Swift, assigning it an id for this instance. Called on
+  // upgrade and again after hibernation wake (when Swift's socket map was lost),
+  // reading the principal the Worker stored in the socket attachment.
+  private async openSocket(ws: WebSocket): Promise<number> {
+    await this.ensureStarted();
+    const id = nextSocketID++;
+    sockets.set(id, ws);
+    this.openedSockets.set(ws, id);
+    const attachment = (ws.deserializeAttachment() ?? {}) as { principal?: string };
+    (globalThis as any).__swiftwebSocketID = id;
+    (globalThis as any).__swiftwebSocketPrincipal = attachment.principal ?? "";
+    this.instance.exports.swiftwebSocketOpened();
+    return id;
+  }
+
+  // Hibernation handlers: the DO may be evicted while sockets stay open, so
+  // these run on a fresh instance. Frames are Envelopes dispatched by Swift;
+  // server → client pushes are one-way, and durable state is in @ActorStorage,
+  // so nothing that must outlive a wake lives in socket memory.
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    const id = this.openedSockets.get(ws) ?? (await this.openSocket(ws));
+    (globalThis as any).__swiftwebSocketID = id;
+    (globalThis as any).__swiftwebSocketFrame =
+      typeof message === "string" ? message : new TextDecoder().decode(message);
+    this.instance.exports.swiftwebSocketMessage();
+  }
+
+  async webSocketClose(ws: WebSocket): Promise<void> {
+    const id = this.openedSockets.get(ws);
+    if (id === undefined) {
+      return;
+    }
+    await this.ensureStarted();
+    (globalThis as any).__swiftwebSocketID = id;
+    this.instance.exports.swiftwebSocketClosed();
+    sockets.delete(id);
+    this.openedSockets.delete(ws);
+  }
+
+  async webSocketError(ws: WebSocket): Promise<void> {
+    await this.webSocketClose(ws);
+  }
+
   async fetch(request: Request): Promise<Response> {
-    // WebSocket session: frames are Envelopes, dispatched by the Swift side.
+    // WebSocket session: hibernatable, so the DO can be evicted while it stays
+    // open. The verified principal rides in the attachment to survive wake.
     if (request.headers.get("Upgrade") === "websocket") {
       await this.ensureStarted();
       const pair = new WebSocketPair();
       const client = pair[0];
       const server = pair[1];
-      server.accept();
-      const id = nextSocketID++;
-      sockets.set(id, server);
-      (globalThis as any).__swiftwebSocketID = id;
-      // The Worker verified this at upgrade time; bind it to the connection.
-      (globalThis as any).__swiftwebSocketPrincipal = request.headers.get(PRINCIPAL_HEADER) ?? "";
-      this.instance.exports.swiftwebSocketOpened();
-      server.addEventListener("message", (event: MessageEvent) => {
-        (globalThis as any).__swiftwebSocketID = id;
-        (globalThis as any).__swiftwebSocketFrame = String(event.data);
-        this.instance.exports.swiftwebSocketMessage();
-      });
-      server.addEventListener("close", () => {
-        (globalThis as any).__swiftwebSocketID = id;
-        this.instance.exports.swiftwebSocketClosed();
-        sockets.delete(id);
-      });
+      server.serializeAttachment({ principal: request.headers.get(PRINCIPAL_HEADER) ?? "" });
+      this.ctx.acceptWebSocket(server);
+      await this.openSocket(server);
       return new Response(null, { status: 101, webSocket: client });
     }
 
