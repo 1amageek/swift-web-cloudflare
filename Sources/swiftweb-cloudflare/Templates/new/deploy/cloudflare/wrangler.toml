@@ -24,3 +24,4 @@ new_sqlite_classes = ["SwiftWebActorDO"]
 [[rules]]
 type = "CompiledWasm"
 globs = ["**/*.wasm"]
+fallthrough = true
