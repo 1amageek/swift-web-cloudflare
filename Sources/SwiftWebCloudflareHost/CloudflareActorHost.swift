@@ -40,6 +40,7 @@ public enum CloudflareActorHost {
         var actorSecurity: WebActorSecurityPolicy = .defaults
         var executorInstalled = false
         var sockets: [Int: WebSocketActorTransport] = [:]
+        var pageServer: CloudflarePageServer?
     }
 
     private static let state = Mutex(State())
@@ -69,8 +70,17 @@ public enum CloudflareActorHost {
             do {
                 let definition = Definition()
                 let application = CloudflareWebApplication()
-                application.securityConfiguration = definition.security
+                let security = definition.security
+                application.securityConfiguration = security
                 let system = definition.actorSystem
+
+                // Mirror HTTPServerAppRunner.configure: middleware chain,
+                // action gateway, app services, then scene lowering — so page
+                // and service routes behave identically across hosts.
+                var chain = WebMiddlewares()
+                security.installMiddleware(on: &chain)
+                ActionGateway.register(on: application)
+                try await definition.services.register(on: application)
                 try await _SceneRenderer.make(
                     definition.body,
                     in: .root(application, actorSystem: system)
@@ -79,14 +89,86 @@ public enum CloudflareActorHost {
                 if let storageToken {
                     system.setPersistentStore(DurableObjectActorStateStore(token: storageToken))
                 }
+                let pageServer = CloudflarePageServer(
+                    application: application,
+                    matcher: WebRouteMatcher(routes: application.collectedRoutes),
+                    chain: chain,
+                    sessionStorage: CloudflareSessionStorage(),
+                    logger: application.logger
+                )
                 state.withLock {
                     $0.system = system
                     $0.actorSecurity = definition.security.actors
+                    $0.pageServer = pageServer
                 }
 
                 signalReady(startID)
             } catch {
                 signalFailed(startID, message: String(describing: error))
+            }
+        }
+    }
+
+    // MARK: - Page serving
+
+    /// Reads the request JS placed in `globalThis.__swiftwebRequest` and serves
+    /// it through the app's collected page/service routes. Wasm entry modules
+    /// forward their request export here.
+    ///
+    /// Completion crosses back through `swiftwebPageComplete(callID, json)`;
+    /// host-level failures (undecodable request, host not started) go through
+    /// `swiftwebPageFailed(callID, message)`. HTTP-level errors are proper
+    /// responses with error status codes, not failures.
+    public static func handlePendingRequest() {
+        guard let requestJSON = JSObject.global.__swiftwebRequest.string else {
+            _ = JSObject.global.swiftwebPageFailed.function?(
+                JSValue.string(""),
+                JSValue.string("__swiftwebRequest must be a JSON string")
+            )
+            return
+        }
+        handleRequest(requestJSON)
+    }
+
+    public static func handleRequest(_ requestJSON: String) {
+        Task {
+            let request: CloudflarePageRequest
+            do {
+                request = try JSONDecoder().decode(
+                    CloudflarePageRequest.self,
+                    from: Data(requestJSON.utf8)
+                )
+            } catch {
+                _ = JSObject.global.swiftwebPageFailed.function?(
+                    JSValue.string(""),
+                    JSValue.string("invalid page request: \(String(describing: error))")
+                )
+                return
+            }
+
+            guard let server = state.withLock({ $0.pageServer }) else {
+                _ = JSObject.global.swiftwebPageFailed.function?(
+                    JSValue.string(request.callID),
+                    JSValue.string(String(describing: CloudflareHostError.notReady))
+                )
+                return
+            }
+
+            let response = await server.respond(to: request)
+            do {
+                let responseJSON = String(
+                    decoding: try JSONEncoder().encode(response),
+                    as: UTF8.self
+                )
+                _ = JSObject.global.swiftwebPageComplete.function?(
+                    JSValue.string(request.callID),
+                    JSValue.string(responseJSON)
+                )
+            } catch {
+                _ = JSObject.global.swiftwebPageFailed.function?(
+                    JSValue.string(request.callID),
+                    JSValue.string("failed to encode page response: \(String(describing: error))")
+                )
             }
         }
     }

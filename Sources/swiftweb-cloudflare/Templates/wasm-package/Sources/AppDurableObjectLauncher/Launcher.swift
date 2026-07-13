@@ -13,6 +13,12 @@ func swiftwebInvoke() {
     CloudflareActorHost.invokePendingEnvelope()
 }
 
+@_expose(wasm, "swiftwebHandleRequest")
+@_cdecl("swiftwebHandleRequest")
+func swiftwebHandleRequest() {
+    CloudflareActorHost.handlePendingRequest()
+}
+
 @_expose(wasm, "swiftwebSocketOpened")
 @_cdecl("swiftwebSocketOpened")
 func swiftwebSocketOpened() {
