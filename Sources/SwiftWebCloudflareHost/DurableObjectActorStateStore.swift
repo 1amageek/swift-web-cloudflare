@@ -1,3 +1,4 @@
+#if SWIFTWEB_ACTORS
 #if canImport(FoundationEssentials)
 import FoundationEssentials
 #else
@@ -54,3 +55,4 @@ final class DurableObjectActorStateStore: WebActorPersistentStore {
         _ = global.swiftwebStorageSave.function?()
     }
 }
+#endif

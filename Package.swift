@@ -16,10 +16,22 @@ let package = Package(
         .library(name: "SwiftWebCloudflareHost", targets: ["SwiftWebCloudflareHost"]),
         .executable(name: "swiftweb-cloudflare", targets: ["swiftweb-cloudflare"]),
     ],
+    // Forwards to swift-web's Actors trait (default-enabled). Disable for
+    // page-serving-only Workers to keep Distributed/ActorRuntime out of the
+    // wasm binary; the actor invocation and WebSocket paths compile out.
+    traits: [
+        .default(enabledTraits: ["Actors"]),
+        .trait(name: "Actors"),
+    ],
     dependencies: [
-        // swift-web 0.3.0 carries the edge authorization seam, @ActorStorage
-        // persistence, and the SwiftWebHost rename this adapter depends on.
-        .package(url: "https://github.com/1amageek/swift-web.git", from: "0.3.0"),
+        // swift-web 0.3.3 declares the Actors trait this adapter forwards
+        // (0.3.0 introduced the edge authorization seam, @ActorStorage
+        // persistence, and the SwiftWebHost rename it builds on).
+        .package(
+            url: "https://github.com/1amageek/swift-web.git",
+            from: "0.3.3",
+            traits: [.trait(name: "Actors", condition: .when(traits: ["Actors"]))]
+        ),
         .package(url: "https://github.com/1amageek/JavaScriptKit.git", from: "0.57.0"),
     ],
     targets: [
@@ -40,6 +52,9 @@ let package = Package(
                     package: "JavaScriptKit",
                     condition: .when(platforms: [.wasi])
                 ),
+            ],
+            swiftSettings: [
+                .define("SWIFTWEB_ACTORS", .when(traits: ["Actors"])),
             ]
         ),
     ]

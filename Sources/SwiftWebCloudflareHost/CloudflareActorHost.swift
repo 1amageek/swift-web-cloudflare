@@ -1,4 +1,6 @@
+#if SWIFTWEB_ACTORS
 @preconcurrency import ActorRuntime
+#endif
 #if canImport(FoundationEssentials)
 import FoundationEssentials
 #else
@@ -36,24 +38,30 @@ import Synchronization
 ///   it, or `swiftwebInvokeFailed(callID, message)` when dispatch threw.
 public enum CloudflareActorHost {
     private struct State: Sendable {
+        #if SWIFTWEB_ACTORS
         var system: WebActorSystem?
         var actorSecurity: WebActorSecurityPolicy = .defaults
-        var executorInstalled = false
         var sockets: [Int: WebSocketActorTransport] = [:]
+        #endif
+        var executorInstalled = false
         var pageServer: CloudflarePageServer?
     }
 
     private static let state = Mutex(State())
+    #if SWIFTWEB_ACTORS
     private static let sessions = WebSocketSessionRouter()
+    #endif
 
     public static func start<Definition: App>(_ definitionType: Definition.Type) {
         // Capture the start correlation ID synchronously, before the task
         // below suspends: a concurrent DO cold-start in the same isolate can
         // overwrite `__swiftwebStartID` while this one is lowering scenes.
         let startID = JSObject.global.__swiftwebStartID.number.map(Int.init)
+        #if SWIFTWEB_ACTORS
         // The DO's storage token, captured now for the same reason. Identifies
         // this DO's SQLite when several DOs share one isolate.
         let storageToken = JSObject.global.__swiftwebStorageToken.number
+        #endif
 
         let installExecutor = state.withLock { state in
             let first = !state.executorInstalled
@@ -85,10 +93,12 @@ public enum CloudflareActorHost {
                     definition.body,
                     in: .root(application, actorSystem: system)
                 )
+                #if SWIFTWEB_ACTORS
                 system.setTransport(sessions)
                 if let storageToken {
                     system.setPersistentStore(DurableObjectActorStateStore(token: storageToken))
                 }
+                #endif
                 let pageServer = CloudflarePageServer(
                     application: application,
                     matcher: WebRouteMatcher(routes: application.collectedRoutes),
@@ -97,8 +107,10 @@ public enum CloudflareActorHost {
                     logger: application.logger
                 )
                 state.withLock {
+                    #if SWIFTWEB_ACTORS
                     $0.system = system
                     $0.actorSecurity = definition.security.actors
+                    #endif
                     $0.pageServer = pageServer
                 }
 
@@ -173,6 +185,7 @@ public enum CloudflareActorHost {
         }
     }
 
+    #if SWIFTWEB_ACTORS
     /// Reads the envelope JS placed in `globalThis.__swiftwebEnvelope` and
     /// dispatches it. Wasm entry modules forward their invoke export here.
     ///
@@ -296,6 +309,7 @@ public enum CloudflareActorHost {
         sessions.unregister(transport: transport)
         transport.closed()
     }
+    #endif
 
     private static func signalReady(_ startID: Int?) {
         _ = JSObject.global.swiftwebReady.function?(Self.startIDValue(startID))
@@ -312,6 +326,7 @@ public enum CloudflareActorHost {
         startID.map { JSValue.number(Double($0)) } ?? .null
     }
 
+    #if SWIFTWEB_ACTORS
     /// Treats a missing or empty JS string as "no value": the Worker clears the
     /// principal globals to "" on unauthenticated requests, and those globals
     /// persist across calls, so an empty read must not leak a prior principal.
@@ -332,6 +347,7 @@ public enum CloudflareActorHost {
             return nil
         }
     }
+    #endif
 }
 
 enum CloudflareHostError: Error {
