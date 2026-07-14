@@ -1,10 +1,9 @@
 #if canImport(FoundationEssentials)
 import FoundationEssentials
-#else
+#elseif canImport(Foundation)
 import Foundation
 #endif
 import SwiftWebCore
-import Synchronization
 
 /// In-isolate session persistence for the Cloudflare host, mirroring the
 /// swift-http-server host's `InMemorySessionStorage`.
@@ -14,18 +13,20 @@ import Synchronization
 /// need durable sessions must keep their state in a durable store (Durable
 /// Object storage, KV) instead of the cookie session.
 final class CloudflareSessionStorage: Sendable {
-    private let sessions = Mutex<[String: [String: String]]>([:])
+    // Workers isolates are single-threaded; plain storage is race-free here
+    // and, unlike Mutex, exists on the Embedded profile.
+    nonisolated(unsafe) private var sessions: [String: [String: String]] = [:]
 
     func read(_ id: String) -> [String: String]? {
-        sessions.withLock { $0[id] }
+        sessions[id]
     }
 
     func write(_ id: String, values: [String: String]) {
-        sessions.withLock { $0[id] = values }
+        sessions[id] = values
     }
 
     func delete(_ id: String) {
-        sessions.withLock { $0[id] = nil }
+        sessions[id] = nil
     }
 }
 
@@ -44,63 +45,58 @@ final class CloudflareSessionBox: Sendable {
         var destroyed = false
     }
 
-    private let state: Mutex<State>
+    nonisolated(unsafe) private var state: State
     private let storage: CloudflareSessionStorage
     let hasExistingSession: Bool
 
     init(cookieValue: String?, storage: CloudflareSessionStorage) {
         self.storage = storage
         if let cookieValue, let values = storage.read(cookieValue) {
-            self.state = Mutex(State(id: cookieValue, values: values))
+            self.state = State(id: cookieValue, values: values)
             self.hasExistingSession = true
         } else {
-            self.state = Mutex(State())
+            self.state = State()
             self.hasExistingSession = false
         }
     }
 
-    var webSession: WebSession {
-        WebSession(
-            identifierReader: { self.state.withLock { $0.id } },
-            valuesReader: { self.state.withLock { $0.values } },
-            valueReader: { key in self.state.withLock { $0.values[key] } },
+    var webSession: RequestSession {
+        RequestSession(
+            identifierReader: { self.state.id },
+            valuesReader: { self.state.values },
+            valueReader: { key in self.state.values[key] },
             valueWriter: { key, value in
-                self.state.withLock { state in
-                    guard value != nil || state.id != nil || !state.values.isEmpty else {
-                        return
-                    }
-                    state.values[key] = value
-                    state.modified = true
-                    state.destroyed = false
+                guard value != nil || self.state.id != nil || !self.state.values.isEmpty else {
+                    return
                 }
+                self.state.values[key] = value
+                self.state.modified = true
+                self.state.destroyed = false
             },
             destroyHandler: {
-                self.state.withLock { state in
-                    guard state.id != nil else {
-                        state.values.removeAll()
-                        state.modified = false
-                        return
-                    }
-                    state.values.removeAll()
-                    state.destroyed = true
-                    state.modified = false
+                guard self.state.id != nil else {
+                    self.state.values.removeAll()
+                    self.state.modified = false
+                    return
                 }
+                self.state.values.removeAll()
+                self.state.destroyed = true
+                self.state.modified = false
             }
         )
     }
 
     /// Persists session changes and appends the matching `Set-Cookie` header.
-    func finalize(response: inout WebResponse) {
-        let action: (id: String, values: [String: String]?)? = state.withLock { state in
-            if state.destroyed, let id = state.id {
-                return (id, nil)
-            }
-            if state.modified {
-                let id = state.id ?? Self.generateID()
-                state.id = id
-                return (id, state.values)
-            }
-            return nil
+    func finalize(response: inout Response) {
+        let action: (id: String, values: [String: String]?)?
+        if state.destroyed, let id = state.id {
+            action = (id, nil)
+        } else if state.modified {
+            let id = state.id ?? Self.generateID()
+            state.id = id
+            action = (id, state.values)
+        } else {
+            action = nil
         }
         guard let action else {
             return
@@ -109,7 +105,7 @@ final class CloudflareSessionBox: Sendable {
             storage.write(action.id, values: values)
             response.setCookie(
                 Self.cookieName,
-                WebHTTPCookieValue(
+                CookieValue(
                     string: action.id,
                     maxAge: Self.cookieMaxAge,
                     path: "/",
@@ -122,7 +118,7 @@ final class CloudflareSessionBox: Sendable {
             storage.delete(action.id)
             response.setCookie(
                 Self.cookieName,
-                WebHTTPCookieValue(
+                CookieValue(
                     string: "",
                     maxAge: 0,
                     path: "/",
@@ -137,7 +133,7 @@ final class CloudflareSessionBox: Sendable {
     private static func generateID() -> String {
         var generator = SystemRandomNumberGenerator()
         let bytes = (0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
-        return Data(bytes).base64EncodedString()
+        return Base64Coding.encode(bytes)
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")

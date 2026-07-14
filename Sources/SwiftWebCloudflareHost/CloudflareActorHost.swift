@@ -3,7 +3,7 @@
 #endif
 #if canImport(FoundationEssentials)
 import FoundationEssentials
-#else
+#elseif canImport(Foundation)
 import Foundation
 #endif
 #if canImport(JavaScriptEventLoop)
@@ -12,7 +12,6 @@ import JavaScriptEventLoop
 import JavaScriptKit
 import SwiftWebActors
 import SwiftWebCore
-import Synchronization
 
 /// The Durable Object entry point: hosts an app's `ActorGroup` actors on the
 /// real `WebActorSystem`, driven by JavaScriptKit's event loop.
@@ -47,7 +46,9 @@ public enum CloudflareActorHost {
         var pageServer: CloudflarePageServer?
     }
 
-    private static let state = Mutex(State())
+    // Workers isolates are single-threaded; plain storage is race-free
+    // here and, unlike Mutex, exists on the Embedded profile.
+    nonisolated(unsafe) private static var state = State()
     #if SWIFTWEB_ACTORS
     private static let sessions = WebSocketSessionRouter()
     #endif
@@ -63,11 +64,8 @@ public enum CloudflareActorHost {
         let storageToken = JSObject.global.__swiftwebStorageToken.number
         #endif
 
-        let installExecutor = state.withLock { state in
-            let first = !state.executorInstalled
-            state.executorInstalled = true
-            return first
-        }
+        let installExecutor = !state.executorInstalled
+        state.executorInstalled = true
         if installExecutor {
             #if canImport(JavaScriptEventLoop)
             JavaScriptEventLoop.installGlobalExecutor()
@@ -77,7 +75,7 @@ public enum CloudflareActorHost {
         Task {
             do {
                 let definition = Definition()
-                let application = CloudflareWebApplication()
+                let application = CloudflareApplication()
                 let security = definition.security
                 application.securityConfiguration = security
                 let system = definition.actorSystem
@@ -85,9 +83,11 @@ public enum CloudflareActorHost {
                 // Mirror HTTPServerAppRunner.configure: middleware chain,
                 // action gateway, app services, then scene lowering — so page
                 // and service routes behave identically across hosts.
-                var chain = WebMiddlewares()
+                var chain = Middlewares()
                 security.installMiddleware(on: &chain)
+                #if !hasFeature(Embedded)
                 ActionGateway.register(on: application)
+                #endif
                 try await definition.services.register(on: application)
                 try await _SceneRenderer.make(
                     definition.body,
@@ -101,88 +101,89 @@ public enum CloudflareActorHost {
                 #endif
                 let pageServer = CloudflarePageServer(
                     application: application,
-                    matcher: WebRouteMatcher(routes: application.collectedRoutes),
+                    matcher: RouteMatcher(routes: application.collectedRoutes),
                     chain: chain,
                     sessionStorage: CloudflareSessionStorage(),
                     logger: application.logger
                 )
-                state.withLock {
-                    #if SWIFTWEB_ACTORS
-                    $0.system = system
-                    $0.actorSecurity = definition.security.actors
-                    #endif
-                    $0.pageServer = pageServer
-                }
+                #if SWIFTWEB_ACTORS
+                state.system = system
+                state.actorSecurity = definition.security.actors
+                #endif
+                state.pageServer = pageServer
 
                 signalReady(startID)
             } catch {
-                signalFailed(startID, message: String(describing: error))
+                signalFailed(startID, message: HostErrorText.of(error))
             }
         }
     }
 
     // MARK: - Page serving
 
-    /// Reads the request JS placed in `globalThis.__swiftwebRequest` and serves
-    /// it through the app's collected page/service routes. Wasm entry modules
-    /// forward their request export here.
+    /// Reads the request JS placed in the `__swiftwebRequest*` string globals
+    /// and serves it through the app's collected page/service routes. Wasm
+    /// entry modules forward their request export here. The globals are read
+    /// synchronously before the serving task suspends: a concurrent request
+    /// in the same isolate overwrites them.
     ///
-    /// Completion crosses back through `swiftwebPageComplete(callID, json)`;
-    /// host-level failures (undecodable request, host not started) go through
+    /// Completion crosses back through
+    /// `swiftwebPageComplete(callID, status, headersWire, bodyBase64)` —
+    /// headers as a `CloudflarePageWire` flat list — so the boundary carries
+    /// plain strings and numbers, no JSON. Host-level failures (missing
+    /// request globals, host not started) go through
     /// `swiftwebPageFailed(callID, message)`. HTTP-level errors are proper
     /// responses with error status codes, not failures.
     public static func handlePendingRequest() {
-        guard let requestJSON = JSObject.global.__swiftwebRequest.string else {
+        guard let callID = JSObject.global.__swiftwebRequestCallID.string else {
             _ = JSObject.global.swiftwebPageFailed.function?(
                 JSValue.string(""),
-                JSValue.string("__swiftwebRequest must be a JSON string")
+                JSValue.string("__swiftwebRequestCallID must be a string")
             )
             return
         }
-        handleRequest(requestJSON)
+        let request = CloudflarePageRequest(
+            callID: callID,
+            method: JSObject.global.__swiftwebRequestMethod.string ?? "GET",
+            path: JSObject.global.__swiftwebRequestPath.string ?? "/",
+            search: nonEmptyGlobal(JSObject.global.__swiftwebRequestSearch.string),
+            scheme: nonEmptyGlobal(JSObject.global.__swiftwebRequestScheme.string),
+            host: nonEmptyGlobal(JSObject.global.__swiftwebRequestHost.string),
+            headers: CloudflarePageWire.decodeHeaders(
+                JSObject.global.__swiftwebRequestHeaders.string ?? ""
+            ),
+            bodyBase64: nonEmptyGlobal(JSObject.global.__swiftwebRequestBodyBase64.string)
+        )
+        handleRequest(request)
     }
 
-    public static func handleRequest(_ requestJSON: String) {
+    static func handleRequest(_ request: CloudflarePageRequest) {
         Task {
-            let request: CloudflarePageRequest
-            do {
-                request = try JSONDecoder().decode(
-                    CloudflarePageRequest.self,
-                    from: Data(requestJSON.utf8)
-                )
-            } catch {
-                _ = JSObject.global.swiftwebPageFailed.function?(
-                    JSValue.string(""),
-                    JSValue.string("invalid page request: \(String(describing: error))")
-                )
-                return
-            }
-
-            guard let server = state.withLock({ $0.pageServer }) else {
+            guard let server = state.pageServer else {
                 _ = JSObject.global.swiftwebPageFailed.function?(
                     JSValue.string(request.callID),
-                    JSValue.string(String(describing: CloudflareHostError.notReady))
+                    JSValue.string("notReady")
                 )
                 return
             }
 
             let response = await server.respond(to: request)
-            do {
-                let responseJSON = String(
-                    decoding: try JSONEncoder().encode(response),
-                    as: UTF8.self
-                )
-                _ = JSObject.global.swiftwebPageComplete.function?(
-                    JSValue.string(request.callID),
-                    JSValue.string(responseJSON)
-                )
-            } catch {
-                _ = JSObject.global.swiftwebPageFailed.function?(
-                    JSValue.string(request.callID),
-                    JSValue.string("failed to encode page response: \(String(describing: error))")
-                )
-            }
+            _ = JSObject.global.swiftwebPageComplete.function?(
+                JSValue.string(request.callID),
+                JSValue.number(Double(response.status)),
+                JSValue.string(response.headersWire),
+                JSValue.string(response.bodyBase64)
+            )
         }
+    }
+
+    /// The Worker clears unused request globals to "" so a prior request's
+    /// value never leaks; an empty read means "no value".
+    private static func nonEmptyGlobal(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else {
+            return nil
+        }
+        return value
     }
 
     #if SWIFTWEB_ACTORS
@@ -208,7 +209,7 @@ public enum CloudflareActorHost {
 
     public static func invoke(_ envelopeJSON: String, principal: String? = nil) {
         Task {
-            let (system, actorSecurity) = state.withLock { ($0.system, $0.actorSecurity) }
+            let (system, actorSecurity) = (state.system, state.actorSecurity)
             let callID = Self.callID(in: envelopeJSON) ?? ""
             do {
                 guard let system else {
@@ -264,7 +265,7 @@ public enum CloudflareActorHost {
         // The principal is verified by the Worker at upgrade time and bound to
         // the connection: every invocation on this socket carries it.
         let principal = Self.nonEmpty(JSObject.global.__swiftwebSocketPrincipal.string)
-        let (system, actorSecurity) = state.withLock { ($0.system, $0.actorSecurity) }
+        let (system, actorSecurity) = (state.system, state.actorSecurity)
         let transport = WebSocketActorTransport(
             // The client's observer ID is a push return address, not a
             // principal. Trust-on-supply keeps agent → client push working;
@@ -287,7 +288,7 @@ public enum CloudflareActorHost {
         transport.onInboundSender { peerID, transport in
             sessions.register(peerID, transport: transport)
         }
-        state.withLock { $0.sockets[id] = transport }
+        state.sockets[id] = transport
     }
 
     public static func socketMessage() {
@@ -295,14 +296,14 @@ public enum CloudflareActorHost {
               let frame = JSObject.global.__swiftwebSocketFrame.string else {
             return
         }
-        state.withLock { $0.sockets[id] }?.receive(frame)
+        state.sockets[id]?.receive(frame)
     }
 
     public static func socketClosed() {
         guard let id = JSObject.global.__swiftwebSocketID.number.map(Int.init) else {
             return
         }
-        let transport = state.withLock { $0.sockets.removeValue(forKey: id) }
+        let transport = state.sockets.removeValue(forKey: id)
         guard let transport else {
             return
         }

@@ -29,10 +29,10 @@ let package = Package(
         // persistence, and the SwiftWebHost rename it builds on).
         .package(
             url: "https://github.com/1amageek/swift-web.git",
-            from: "0.3.3",
+            from: "0.4.0",
             traits: [.trait(name: "Actors", condition: .when(traits: ["Actors"]))]
         ),
-        .package(url: "https://github.com/1amageek/JavaScriptKit.git", from: "0.57.0"),
+        .package(url: "https://github.com/1amageek/JavaScriptKit.git", from: "0.57.1"),
     ],
     targets: [
         .executableTarget(

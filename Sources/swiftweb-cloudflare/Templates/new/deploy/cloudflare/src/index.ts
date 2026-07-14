@@ -68,6 +68,34 @@ const pending = new Map<string, { resolve: (json: string) => void; reject: (erro
   pending.get(callID)?.reject(new Error(message));
   pending.delete(callID);
 };
+// Page serving: responses are correlated by callID; headers cross the wasm
+// boundary as a flat name/value list joined by the ASCII unit separator,
+// which cannot appear in HTTP field names or values.
+interface PageResult {
+  status: number;
+  headersWire: string;
+  bodyBase64: string;
+}
+
+const WIRE_SEPARATOR = "\u001f";
+
+let nextPageCallID = 1;
+const pagePending = new Map<string, { resolve: (page: PageResult) => void; reject: (error: Error) => void }>();
+
+(globalThis as any).swiftwebPageComplete = (
+  callID: string,
+  status: number,
+  headersWire: string,
+  bodyBase64: string,
+) => {
+  pagePending.get(callID)?.resolve({ status, headersWire, bodyBase64 });
+  pagePending.delete(callID);
+};
+(globalThis as any).swiftwebPageFailed = (callID: string, message: string) => {
+  pagePending.get(callID)?.reject(new Error(message));
+  pagePending.delete(callID);
+};
+
 // @ActorStorage grain-state persistence, backed by this DO's SQLite. Synchronous
 // (DO SQLite is synchronous); Swift sets the token, actor ID, and blob globals.
 (globalThis as any).swiftwebStorageLoad = () => {
@@ -139,6 +167,89 @@ function invoke(instance: any, envelopeJSON: string, principal: string): Promise
     // leaks: the global persists across invocations in the isolate.
     (globalThis as any).__swiftwebPrincipal = principal;
     instance.exports.swiftwebInvoke();
+  });
+}
+
+// Pages are stateless, so they render on a Worker-scope instance instead of
+// hopping through a Durable Object; actors keep their per-identity DOs.
+let pageInstanceReady: Promise<any> | undefined;
+
+function ensurePageInstance(): Promise<any> {
+  if (!pageInstanceReady) {
+    pageInstanceReady = (async () => {
+      const instance = await instantiate();
+      await start(instance);
+      return instance;
+    })().catch((error) => {
+      // A failed start must not poison the isolate: the next request retries.
+      pageInstanceReady = undefined;
+      throw error;
+    });
+  }
+  return pageInstanceReady;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function renderPage(request: Request): Promise<Response> {
+  const instance = await ensurePageInstance();
+  const url = new URL(request.url);
+
+  const headerParts: string[] = [];
+  request.headers.forEach((value, name) => {
+    headerParts.push(name, value);
+  });
+
+  let bodyBase64 = "";
+  if (request.method !== "GET" && request.method !== "HEAD" && request.body) {
+    bodyBase64 = bytesToBase64(new Uint8Array(await request.arrayBuffer()));
+  }
+
+  const callID = `p${nextPageCallID++}`;
+  const page = await new Promise<PageResult>((resolve, reject) => {
+    pagePending.set(callID, { resolve, reject });
+    // Set every request global (empty string = no value) so a prior
+    // request's value never leaks, then invoke synchronously: Swift reads
+    // the globals before its serving task suspends.
+    const g = globalThis as any;
+    g.__swiftwebRequestCallID = callID;
+    g.__swiftwebRequestMethod = request.method;
+    g.__swiftwebRequestPath = url.pathname;
+    g.__swiftwebRequestSearch = url.search.startsWith("?") ? url.search.slice(1) : url.search;
+    g.__swiftwebRequestScheme = url.protocol.replace(":", "");
+    g.__swiftwebRequestHost = url.host;
+    g.__swiftwebRequestHeaders = headerParts.join(WIRE_SEPARATOR);
+    g.__swiftwebRequestBodyBase64 = bodyBase64;
+    instance.exports.swiftwebHandleRequest();
+  });
+
+  const headers: [string, string][] = [];
+  if (page.headersWire.length > 0) {
+    const parts = page.headersWire.split(WIRE_SEPARATOR);
+    for (let i = 0; i + 1 < parts.length; i += 2) {
+      headers.push([parts[i], parts[i + 1]]);
+    }
+  }
+  const body = base64ToBytes(page.bodyBase64);
+  return new Response(body.length > 0 ? body : null, {
+    status: page.status,
+    headers,
   });
 }
 
@@ -342,6 +453,10 @@ export default {
       );
     }
 
-    return errorResponse("Not Found", 404);
+    try {
+      return await renderPage(request);
+    } catch (error) {
+      return errorResponse(String(error), 500);
+    }
   },
 };
