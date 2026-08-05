@@ -13,7 +13,7 @@ import SwiftWebActors
 ///
 /// The bridge is synchronous (DO SQLite has a synchronous API), matching the
 /// closure-free trampoline: Swift sets the per-DO `token`, the actor ID, and the
-/// blob on JS globals, then calls the `swiftwebStorageLoad`/`Save` globals the
+/// blob on JS globals, then calls the actor-state bridge globals the
 /// Worker host implements against `ctx.storage.sql`. The token disambiguates the
 /// DO whose storage to use when several DOs share one isolate.
 final class DurableObjectActorStateStore: WebActorPersistentStore {
@@ -25,10 +25,11 @@ final class DurableObjectActorStateStore: WebActorPersistentStore {
 
     func load(actorID: String) async throws -> [String: Data]? {
         let global = JSObject.global
-        global.__swiftwebStorageToken = .number(token)
-        global.__swiftwebStorageActorID = .string(actorID)
-        _ = global.swiftwebStorageLoad.function?()
-        guard let blob = global.__swiftwebStorageResult.string, !blob.isEmpty else {
+        global.__swiftWebStorageToken = .number(token)
+        global.__swiftWebStorageActorID = .string(actorID)
+        let loadValue: JSValue = global["swiftWebLoadActorState"]
+        _ = loadValue.function?()
+        guard let blob = global.__swiftWebStorageResult.string, !blob.isEmpty else {
             return nil
         }
         let encoded = try JSONDecoder().decode([String: String].self, from: Data(blob.utf8))
@@ -49,10 +50,11 @@ final class DurableObjectActorStateStore: WebActorPersistentStore {
         }
         let blob = String(decoding: try JSONEncoder().encode(encoded), as: UTF8.self)
         let global = JSObject.global
-        global.__swiftwebStorageToken = .number(token)
-        global.__swiftwebStorageActorID = .string(actorID)
-        global.__swiftwebStorageBlob = .string(blob)
-        _ = global.swiftwebStorageSave.function?()
+        global.__swiftWebStorageToken = .number(token)
+        global.__swiftWebStorageActorID = .string(actorID)
+        global.__swiftWebStorageBlob = .string(blob)
+        let saveValue: JSValue = global["swiftWebSaveActorState"]
+        _ = saveValue.function?()
     }
 }
 #endif

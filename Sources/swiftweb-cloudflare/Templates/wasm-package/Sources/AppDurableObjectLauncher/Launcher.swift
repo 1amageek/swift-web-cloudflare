@@ -1,38 +1,40 @@
 import SwiftWebCloudflareHost
 import {{app.name}}
 
-@_expose(wasm, "swiftwebStart")
-@_cdecl("swiftwebStart")
-func swiftwebStart() {
-    CloudflareActorHost.start({{app.name}}.self)
+private let cloudflareHost = CloudflareHost()
+
+@_expose(wasm, "renderApplication")
+@_cdecl("renderApplication")
+func renderApplication() {
+    cloudflareHost.render({{app.name}}())
 }
 
-@_expose(wasm, "swiftwebInvoke")
-@_cdecl("swiftwebInvoke")
-func swiftwebInvoke() {
-    CloudflareActorHost.invokePendingEnvelope()
+@_expose(wasm, "respondToRequest")
+@_cdecl("respondToRequest")
+func respondToRequest() {
+    cloudflareHost.respondToRequest()
 }
 
-@_expose(wasm, "swiftwebHandleRequest")
-@_cdecl("swiftwebHandleRequest")
-func swiftwebHandleRequest() {
-    CloudflareActorHost.handlePendingRequest()
+@_expose(wasm, "invokeActor")
+@_cdecl("invokeActor")
+func invokeActor() {
+    cloudflareHost.invokeActor()
 }
 
-@_expose(wasm, "swiftwebSocketOpened")
-@_cdecl("swiftwebSocketOpened")
-func swiftwebSocketOpened() {
-    CloudflareActorHost.socketOpened()
+@_expose(wasm, "openActorSocket")
+@_cdecl("openActorSocket")
+func openActorSocket() {
+    cloudflareHost.openActorSocket()
 }
 
-@_expose(wasm, "swiftwebSocketMessage")
-@_cdecl("swiftwebSocketMessage")
-func swiftwebSocketMessage() {
-    CloudflareActorHost.socketMessage()
+@_expose(wasm, "receiveActorSocketMessage")
+@_cdecl("receiveActorSocketMessage")
+func receiveActorSocketMessage() {
+    cloudflareHost.receiveActorSocketMessage()
 }
 
-@_expose(wasm, "swiftwebSocketClosed")
-@_cdecl("swiftwebSocketClosed")
-func swiftwebSocketClosed() {
-    CloudflareActorHost.socketClosed()
+@_expose(wasm, "closeActorSocket")
+@_cdecl("closeActorSocket")
+func closeActorSocket() {
+    cloudflareHost.closeActorSocket()
 }

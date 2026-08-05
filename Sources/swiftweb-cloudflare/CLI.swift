@@ -2,7 +2,7 @@ import Foundation
 
 /// Installs the Cloudflare deploy boundary into a SwiftWeb app package:
 ///
-///     swiftweb-cloudflare install --app MyApp [--template new]
+///     swiftweb-cloudflare install --app MyApp
 ///         [--path <appPackageDir>] [--swift-web-cloudflare <path>]
 ///
 /// Writes `deploy/cloudflare/` (worker: routing + per-identity DO) and
@@ -13,13 +13,12 @@ struct SwiftWebCloudflareCLI {
     static func main() throws {
         var arguments = Array(CommandLine.arguments.dropFirst())
         guard arguments.first == "install" else {
-            print("usage: swiftweb-cloudflare install --app <AppTypeName> [--template new] [--path <dir>] [--swift-web-cloudflare <path>]")
+            print("usage: swiftweb-cloudflare install --app <AppTypeName> [--path <dir>] [--swift-web-cloudflare <path>]")
             exit(arguments.first == nil ? 1 : 64)
         }
         arguments.removeFirst()
 
         var appName: String?
-        var template = "new"
         var appPath = FileManager.default.currentDirectoryPath
         var adapterPath = ("~/Desktop/swift-web-cloudflare" as NSString).expandingTildeInPath
 
@@ -28,8 +27,6 @@ struct SwiftWebCloudflareCLI {
             switch argument {
             case "--app":
                 appName = iterator.next()
-            case "--template":
-                template = iterator.next() ?? template
             case "--path":
                 appPath = iterator.next() ?? appPath
             case "--swift-web-cloudflare":
@@ -46,7 +43,6 @@ struct SwiftWebCloudflareCLI {
 
         let installer = DeployBoundaryInstaller(
             appName: appName,
-            template: template,
             appDirectory: URL(fileURLWithPath: appPath, isDirectory: true),
             adapterDirectory: URL(fileURLWithPath: adapterPath, isDirectory: true)
         )
@@ -57,7 +53,7 @@ struct SwiftWebCloudflareCLI {
 enum CLIError: Error, CustomStringConvertible {
     case missingApp
     case unknownArgument(String)
-    case templateNotFound(String)
+    case scaffoldNotFound(String)
 
     var description: String {
         switch self {
@@ -65,15 +61,14 @@ enum CLIError: Error, CustomStringConvertible {
             "--app <AppTypeName> is required"
         case .unknownArgument(let argument):
             "unknown argument: \(argument)"
-        case .templateNotFound(let template):
-            "template not found: \(template)"
+        case .scaffoldNotFound(let path):
+            "Cloudflare scaffold not found: \(path)"
         }
     }
 }
 
 struct DeployBoundaryInstaller {
     let appName: String
-    let template: String
     let appDirectory: URL
     let adapterDirectory: URL
 
@@ -89,11 +84,11 @@ struct DeployBoundaryInstaller {
 
     func run() throws {
         guard let templates = Bundle.module.url(forResource: "Templates", withExtension: nil) else {
-            throw CLIError.templateNotFound("Templates bundle")
+            throw CLIError.scaffoldNotFound("Templates bundle")
         }
-        let deploySource = templates.appendingPathComponent("\(template)/deploy/cloudflare")
+        let deploySource = templates.appendingPathComponent("application/deploy/cloudflare")
         guard FileManager.default.fileExists(atPath: deploySource.path) else {
-            throw CLIError.templateNotFound(template)
+            throw CLIError.scaffoldNotFound(deploySource.path)
         }
 
         let deployDirectory = appDirectory.appendingPathComponent("deploy", isDirectory: true)
@@ -108,7 +103,7 @@ struct DeployBoundaryInstaller {
         try makeExecutable(deployDirectory.appendingPathComponent("wasm/build.sh"))
 
         print("installed deploy/cloudflare and deploy/wasm for \(appName)")
-        print("next: deploy/wasm/build.sh && cd deploy/cloudflare && npm install && npm run dev")
+        print("next: deploy/wasm/build.sh && cd deploy/cloudflare && npm install && npm run types && npm run dev")
     }
 
     private func copyTree(from source: URL, to destination: URL) throws {

@@ -1,0 +1,46 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "{{app.kebabName}}",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-05",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "vars": {
+    "SWIFTWEB_PLATFORM": "cloudflare",
+    "SWIFTWEB_AUTH_PROJECT_ID": "",
+    "SWIFTWEB_AUTH_EMULATOR_HOST": "",
+    "SWIFTWEB_AUTH_JWKS_URL": ""
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SWIFTWEB_ACTOR",
+        "class_name": "SwiftWebActorObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["SwiftWebActorObject"]
+    }
+  ],
+  "rules": [
+    {
+      "type": "CompiledWasm",
+      "globs": ["**/*.wasm"],
+      "fallthrough": true
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01
+    }
+  }
+}

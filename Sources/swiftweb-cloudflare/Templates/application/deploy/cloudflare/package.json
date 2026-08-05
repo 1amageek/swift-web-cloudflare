@@ -1,0 +1,25 @@
+{
+  "name": "{{app.kebabName}}-cloudflare",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --config wrangler.jsonc",
+    "deploy": "wrangler deploy --config wrangler.jsonc",
+    "deploy:check": "wrangler deploy --dry-run --config wrangler.jsonc",
+    "types": "wrangler types worker-configuration.d.ts --config wrangler.jsonc --include-runtime false",
+    "typecheck": "npm run types && tsc --noEmit",
+    "test": "node --experimental-strip-types --test"
+  },
+  "dependencies": {
+    "@bjorn3/browser_wasi_shim": "0.3.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260804.1",
+    "@types/node": "26.1.2",
+    "typescript": "7.0.2",
+    "wrangler": "4.119.0"
+  },
+  "overrides": {
+    "undici": "7.29.0"
+  }
+}

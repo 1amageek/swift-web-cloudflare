@@ -50,8 +50,11 @@ test("rejects a wrong audience", async () => {
 });
 
 test("rejects a missing subject", async () => {
-  const p = validPayload(); delete (p as any).sub;
-  await assert.rejects(verifyIdToken(token(p), config), TokenVerificationError);
+  const { sub: _, ...payloadWithoutSubject } = validPayload();
+  await assert.rejects(
+    verifyIdToken(token(payloadWithoutSubject), config),
+    TokenVerificationError
+  );
 });
 
 test("rejects a malformed JWT", async () => {

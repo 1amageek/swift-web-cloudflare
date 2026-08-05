@@ -1,66 +1,122 @@
 # swift-web-cloudflare
 
-The Cloudflare host adapter for [swift-web](https://github.com/1amageek/swift-web):
-runs an app's `ActorGroup` distributed actors inside Durable Objects on the
-real `WebActorSystem`, with Swift concurrency driven by JavaScriptKit's event
-loop (async model A — verified in workerd).
+The Cloudflare host adapter for [SwiftWeb](https://github.com/1amageek/swift-web).
+SwiftWeb owns declarative app rendering; this package owns the Cloudflare
+Worker, Durable Object, WebSocket, binding, and Swift/WASM boundaries.
+
+```mermaid
+flowchart LR
+  App["SwiftWeb App"] --> Host["CloudflareHost.render(app)"]
+  Host --> Renderer["AppRenderer.render"]
+  Renderer --> Rendered["RenderedApp"]
+  Rendered --> Worker["Cloudflare request adapter"]
+  Worker --> Page["page and endpoint routes"]
+  Worker --> Durable["Durable Object actors"]
+```
+
+`CloudflareHost` does not define another application protocol or application
+container. The same `App`, `Scene`, middleware, actions, routes, security
+configuration, and request runtime used by the native host are rendered once
+through SwiftWeb's host-neutral renderer.
+
+## Add the package
+
+During cross-package development, keep SwiftWeb and this adapter as sibling
+checkouts and use path dependencies:
 
 ```swift
-import SwiftWebCloudflareHost
-
-// Generated wasm entry (reactor model):
-@_expose(wasm, "swiftwebStart")
-@_cdecl("swiftwebStart")
-func swiftwebStart() { CloudflareActorHost.start(MyApp.self) }
-
-@_expose(wasm, "swiftwebInvoke")
-@_cdecl("swiftwebInvoke")
-func swiftwebInvoke() { CloudflareActorHost.invokePendingEnvelope() }
+.package(path: "../swift-web-cloudflare")
 ```
 
-JS protocol (strings only; JS is a no-interpretation trampoline):
-`swiftwebReady()/swiftwebFailed(msg)` after start; JS sets
-`globalThis.__swiftwebEnvelope` and calls the invoke export;
-`swiftwebComplete(callID, json)` / `swiftwebInvokeFailed(callID, msg)` return
-results. No JSClosure (JSClosure traps in workerd), no manual wasm memory.
-
-## Installation
-
-Released as `0.1.0`, depending on the released swift-web (`exact: "0.2.1"`):
+Applications import the library product:
 
 ```swift
-.package(url: "https://github.com/1amageek/swift-web-cloudflare.git", from: "0.1.0"),
+.product(
+    name: "SwiftWebCloudflareHost",
+    package: "swift-web-cloudflare"
+)
 ```
 
-## Scaffolding a deploy
+## Create a deployment scaffold
 
-The `swiftweb-cloudflare` CLI materializes the deploy layout into an app:
-
-```
-swift run swiftweb-cloudflare install --app MyApp
+```sh
+swift run swiftweb-cloudflare install --app MyApp --path /path/to/MyApp
 ```
 
-This writes `deploy/cloudflare` (Worker + wrangler.toml + JS trampoline) and
-`deploy/wasm` (the generated launcher package + `build.sh`). The Worker routes
-`POST /_swiftweb/actors/invoke` by the envelope's `recipientID`
-(`"<contract>:<name>"`) to a per-identity `SwiftWebActorDO` via `idFromName`,
-and upgrades `GET /_swiftweb/actors/ws?actor=…` to a WebSocket on the same DO
-for bidirectional actor messaging (server → client push included).
+The command writes one deployment layout:
 
-## Building for the Durable Object
-
-`deploy/wasm/build.sh` runs the DO build and optimization:
-
-```
-SWIFTWEB_DO=1 swift build --swift-sdk swift-6.3.1-RELEASE_wasm -c release \
-  -Xswiftc -Osize -Xswiftc -Xclang-linker -Xswiftc -mexec-model=reactor
-npx --yes wasm-opt -Oz --strip-debug -o app.wasm <built>.wasm
+```text
+deploy/
+├── cloudflare/   Worker, generated binding types, Durable Object, Wrangler config
+└── wasm/         Swift/WASM launcher and build script
 ```
 
-Instantiate with three import modules: `wasi_snapshot_preview1`
-(browser_wasi_shim), `javascript_kit: swift.wasmImports` (PackageToJS
-runtime.mjs), and `bjs` stubs generated from `WebAssembly.Module.imports`.
+The launcher owns one `CloudflareHost` and exposes semantic event functions:
 
-Verified end-to-end in workerd: envelope POST → Worker routing →
-per-identity DO → activation → state across calls, and WebSocket sessions
-with agent → observer pushes over one duplex channel.
+```swift
+private let cloudflareHost = CloudflareHost()
+
+@_expose(wasm, "renderApplication")
+@_cdecl("renderApplication")
+func renderApplication() {
+    cloudflareHost.render(MyApp())
+}
+```
+
+Request, actor, and socket exports forward to the same host instance. The old
+`swiftwebStart` entry point and `CloudflareActorHost` application-lowering path
+do not exist.
+
+## Build and run locally
+
+Use the pinned Swift 6.4 snapshot and matching WASM SDK:
+
+```sh
+cd deploy/wasm
+./build.sh
+
+cd ../cloudflare
+npm install
+npm run typecheck
+npm test
+npm run dev
+```
+
+The current actor-enabled deployment baseline is:
+
+- Toolchain: `swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-07-23-a`
+- SDK: `swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-07-23-a_wasm`
+
+`SwiftWebCloudflareHost` also compiles with the matching Embedded WASM SDK
+when the `Actors` trait is disabled. Actor-enabled applications use the regular
+WASM profile because `swift-actor-runtime` currently depends on Foundation;
+the adapter does not silently remove actor behavior to force an Embedded build.
+
+### Current actor size boundary
+
+The actor-enabled fixture is not release-ready for a 3 MiB Cloudflare upload
+budget. On 2026-08-05, Wrangler 4.119.0 measured the optimized fixture at
+48,714 KiB upload / 19,134 KiB gzip. Reaching the deployment budget requires
+Embedded-compatible actor serialization in `swift-actor-runtime` and SwiftWeb;
+this adapter does not claim that a regular-WASM build satisfies the limit.
+
+Wrangler configuration is stored in `wrangler.jsonc`. `npm run typecheck`
+regenerates binding types with `wrangler types`; the Worker source does not
+hand-write `Env` or ship a stale generated declaration.
+
+## Request and actor routing
+
+- Ordinary requests render through `RenderedApp.routes` and
+  `RenderedApp.middlewares`.
+- `POST /_swiftweb/actors/invoke` routes by `recipientID` to one Durable Object
+  identity.
+- `GET /_swiftweb/actors/ws?actor=…` upgrades a hibernatable WebSocket on the
+  same Durable Object.
+- Durable Object SQLite backs `@ActorStorage` state.
+- Firebase ID token verification is optional and happens at the Worker boundary
+  before actor traffic reaches Swift/WASM.
+
+See [CloudflareHostRendering.md](Documentation/CloudflareHostRendering.md) for
+the ownership and lifecycle contract and
+[CloudflareHostConcurrency.md](Documentation/CloudflareHostConcurrency.md) for
+the shared-state contract.

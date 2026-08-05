@@ -6,15 +6,11 @@ on:
   pull_request:
 
 jobs:
-  # Typecheck and unit-test the Worker host that ships in each deploy template.
-  # The Swift/WASM host build runs from deploy/wasm/build.sh; it is added here
-  # once swift-web is a tagged URL dependency again (it is a local path during
-  # cross-package development, which CI cannot resolve).
+  # Typecheck and unit-test the Worker host that ships in the deploy scaffold.
+  # The Swift/WASM host build remains available through deploy/wasm/build.sh.
+  # This job validates the Worker boundary independently of the Swift toolchain.
   worker:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        template: [new, chat]
     steps:
       - uses: actions/checkout@v4
 
@@ -22,12 +18,12 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Materialize the ${{ matrix.template }} template
+      - name: Materialize the application template
         run: |
-          src="Sources/swiftweb-cloudflare/Templates/${{ matrix.template }}/deploy/cloudflare"
+          src="Sources/swiftweb-cloudflare/Templates/application/deploy/cloudflare"
           work="$RUNNER_TEMP/worker"
           cp -R "$src" "$work"
-          find "$work" -type f \( -name '*.json' -o -name '*.toml' -o -name '*.ts' \) \
+          find "$work" -type f \( -name '*.json' -o -name '*.jsonc' -o -name '*.ts' \) \
             -exec sed -i 's/{{app.kebabName}}/ci-app/g; s/{{app.name}}/CIApp/g; s/{{app.packageName}}/CIApp/g' {} +
 
       - name: Install

@@ -18,7 +18,7 @@ export interface AuthConfig {
 const DEFAULT_JWKS_URL =
   "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 
-interface WorkerAuthEnv {
+export interface AuthenticationEnvironment {
   SWIFTWEB_AUTH_PROJECT_ID?: string;
   SWIFTWEB_AUTH_EMULATOR_HOST?: string;
   SWIFTWEB_AUTH_JWKS_URL?: string;
@@ -28,7 +28,7 @@ interface WorkerAuthEnv {
 /// no project ID is set, which disables edge verification — the Durable
 /// Object's actor policy is then the only gate (and denies external RPC by
 /// default). Set SWIFTWEB_AUTH_PROJECT_ID to require verified tokens.
-export function authConfigFromEnv(env: WorkerAuthEnv): AuthConfig | null {
+export function authConfigFromEnv(env: AuthenticationEnvironment): AuthConfig | null {
   const projectID = env.SWIFTWEB_AUTH_PROJECT_ID?.trim();
   if (!projectID) {
     return null;
@@ -75,9 +75,12 @@ export async function verifyIdToken(token: string, config: AuthConfig): Promise<
     throw new TokenVerificationError("token is not a well-formed JWT");
   }
   const [headerB64, payloadB64, signatureB64] = parts;
+  if (headerB64 === undefined || payloadB64 === undefined || signatureB64 === undefined) {
+    throw new TokenVerificationError("token is not a well-formed JWT");
+  }
 
-  const header = decodeJSON<JWTHeader>(headerB64, "header");
-  const claims = decodeJSON<Record<string, unknown>>(payloadB64, "payload");
+  const header = decodeHeader(headerB64);
+  const claims = decodeClaims(payloadB64);
 
   if (!config.emulatorHost) {
     if (header.alg !== "RS256") {
@@ -102,7 +105,11 @@ export async function verifyIdToken(token: string, config: AuthConfig): Promise<
 
   validateClaims(claims, config);
 
-  const uid = (claims.user_id ?? claims.sub) as string;
+  const userID = claims.user_id;
+  const uid = typeof userID === "string" && userID.length > 0 ? userID : claims.sub;
+  if (typeof uid !== "string" || uid.length === 0) {
+    throw new TokenVerificationError("missing user identifier");
+  }
   return { uid, claims };
 }
 
@@ -153,13 +160,17 @@ async function refreshKeys(config: AuthConfig): Promise<void> {
   if (!response.ok) {
     throw new TokenVerificationError(`JWKS fetch failed: HTTP ${response.status}`);
   }
-  const body = (await response.json()) as { keys?: FirebaseJWK[] };
-  if (!body.keys || body.keys.length === 0) {
+  const body: unknown = await response.json();
+  if (!isRecord(body) || !Array.isArray(body.keys) || body.keys.length === 0) {
     throw new TokenVerificationError("JWKS has no keys");
   }
 
   const keys = new Map<string, CryptoKey>();
-  for (const jwk of body.keys) {
+  for (const candidate of body.keys) {
+    if (!isFirebaseJWK(candidate)) {
+      continue;
+    }
+    const jwk = candidate;
     if (jwk.kty && jwk.kty !== "RSA") {
       continue;
     }
@@ -199,12 +210,52 @@ function parseMaxAge(cacheControl: string | null): number | null {
   return null;
 }
 
-function decodeJSON<T>(segment: string, label: string): T {
+function decodeHeader(segment: string): JWTHeader {
+  const value = decodeJSON(segment, "header");
+  if (!isRecord(value)) {
+    throw new TokenVerificationError("malformed token header");
+  }
+  const alg = value.alg;
+  const kid = value.kid;
+  if (alg !== undefined && typeof alg !== "string") {
+    throw new TokenVerificationError("malformed token header algorithm");
+  }
+  if (kid !== undefined && typeof kid !== "string") {
+    throw new TokenVerificationError("malformed token header key id");
+  }
+  return { alg, kid };
+}
+
+function decodeClaims(segment: string): Record<string, unknown> {
+  const value = decodeJSON(segment, "payload");
+  if (!isRecord(value)) {
+    throw new TokenVerificationError("malformed token payload");
+  }
+  return value;
+}
+
+function decodeJSON(segment: string, label: string): unknown {
   try {
-    return JSON.parse(new TextDecoder().decode(base64urlToBytes(segment))) as T;
+    return JSON.parse(new TextDecoder().decode(base64urlToBytes(segment)));
   } catch {
     throw new TokenVerificationError(`malformed token ${label}`);
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isFirebaseJWK(value: unknown): value is FirebaseJWK {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    (value.kid === undefined || typeof value.kid === "string") &&
+    (value.kty === undefined || typeof value.kty === "string") &&
+    (value.n === undefined || typeof value.n === "string") &&
+    (value.e === undefined || typeof value.e === "string")
+  );
 }
 
 function base64urlToBytes(value: string): Uint8Array {

@@ -1,12 +1,9 @@
-// swift-tools-version: 6.3
+// swift-tools-version: 6.4
 
 import PackageDescription
 
-// WASM builds resolve swift-web with SWIFTWEB_CORE_ONLY=1 (the 6.3.1 wasm
-// toolchain cannot resolve swift-web's full manifest, and core-only keeps
-// macros/swift-syntax out of the wasm graph):
-//   SWIFTWEB_CORE_ONLY=1 swift build --swift-sdk swift-6.3.1-RELEASE_wasm -c release \
-//     -Xswiftc -Osize -Xswiftc -Xclang-linker -Xswiftc -mexec-model=reactor
+// WASM applications build this host with the matching Swift 6.4 snapshot
+// toolchain and SDK selected by their deployment package.
 let package = Package(
     name: "swift-web-cloudflare",
     platforms: [
@@ -24,12 +21,9 @@ let package = Package(
         .trait(name: "Actors"),
     ],
     dependencies: [
-        // swift-web 0.3.3 declares the Actors trait this adapter forwards
-        // (0.3.0 introduced the edge authorization seam, @ActorStorage
-        // persistence, and the SwiftWebHost rename it builds on).
         .package(
             url: "https://github.com/1amageek/swift-web.git",
-            from: "0.4.0",
+            branch: "main",
             traits: [.trait(name: "Actors", condition: .when(traits: ["Actors"]))]
         ),
         .package(url: "https://github.com/1amageek/JavaScriptKit.git", from: "0.57.1"),
@@ -55,6 +49,13 @@ let package = Package(
             ],
             swiftSettings: [
                 .define("SWIFTWEB_ACTORS", .when(traits: ["Actors"])),
+            ]
+        ),
+        .testTarget(
+            name: "SwiftWebCloudflareHostTests",
+            dependencies: [
+                "SwiftWebCloudflareHost",
+                .product(name: "SwiftWebCore", package: "swift-web"),
             ]
         ),
     ]

@@ -3,20 +3,11 @@
   "id": "cloudflare",
   "name": "SwiftWeb Cloudflare",
   "templates": {
-    "new": {
-      "path": "templates/new",
+    "application": {
+      "path": "templates/application",
       "reference": {
         "title": "SwiftWeb",
         "url": "https://github.com/1amageek/swift-web"
-      }
-    },
-    "named": {
-      "chat": {
-        "path": "templates/chat",
-        "reference": {
-          "title": "SwiftWeb",
-          "url": "https://github.com/1amageek/swift-web"
-        }
       }
     }
   },

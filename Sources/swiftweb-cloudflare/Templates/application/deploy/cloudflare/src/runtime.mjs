@@ -1,4 +1,5 @@
-/// Memory lifetime of closures in Swift are managed by Swift side
+/// JavaScriptKit runtime used by the generated Swift/WASM application.
+/// Memory lifetime of closures in Swift is managed by the Swift side.
 class SwiftClosureDeallocator {
     constructor(exports$1) {
         if (typeof FinalizationRegistry === "undefined") {

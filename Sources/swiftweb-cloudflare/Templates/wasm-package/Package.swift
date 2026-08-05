@@ -1,9 +1,8 @@
-// swift-tools-version: 6.3
+// swift-tools-version: 6.4
 
 import PackageDescription
 
-// Build with the DO toolchain (see build.sh): SWIFTWEB_DO=1 resolves
-// swift-web's core chain plus macros, so app sources compile as-is.
+// Build with the pinned Swift 6.4 toolchain and matching SDK in build.sh.
 let package = Package(
     name: "{{app.kebabName}}-durable-object",
     platforms: [

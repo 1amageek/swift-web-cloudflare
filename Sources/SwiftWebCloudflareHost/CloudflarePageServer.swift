@@ -7,15 +7,16 @@ import HTTPTypes
 #if canImport(Logging)
 import Logging
 #endif
-import SwiftWebCore
+@_spi(Hosting) import SwiftWebCore
 
 /// The request a Worker forwards for page serving, read from the
-/// `__swiftwebRequest*` string globals. JS is a no-interpretation trampoline:
+/// Worker bridge string globals. JavaScript does not interpret the payload:
 /// the body crosses as base64 so binary payloads survive the string channel,
 /// and headers cross as a `CloudflarePageWire`-encoded flat list — plain
 /// strings only, so the boundary needs neither JSON nor Codable in the
 /// binary.
 struct CloudflarePageRequest: Sendable {
+    let runtimeID: Int
     let callID: String
     let method: String
     let path: String
@@ -27,7 +28,7 @@ struct CloudflarePageRequest: Sendable {
 }
 
 /// The response returned to the Worker through
-/// `swiftwebPageComplete(callID, status, headersWire, bodyBase64)`.
+/// the Worker response callback.
 struct CloudflarePageResponse: Sendable {
     let status: Int
     let headersWire: String
@@ -71,17 +72,40 @@ enum CloudflarePageWire {
 /// `SwiftWebHostHTTPHandler` on the swift-http-server host, with plain-string
 /// globals crossing the JS boundary instead of NIO channels.
 struct CloudflarePageServer: Sendable {
-    let application: CloudflareApplication
+    static let defaultMaximumBodySize = 16 * 1024 * 1024
+
+    let runtimeContext: RequestRuntimeContext
     let matcher: RouteMatcher
     let chain: Middlewares
     let sessionStorage: CloudflareSessionStorage
     let logger: Logger
+
+    init(
+        renderedApp: RenderedApp,
+        sessionStorage: CloudflareSessionStorage,
+        logger: Logger
+    ) {
+        self.runtimeContext = renderedApp.requestContext
+        self.matcher = RouteMatcher(routes: renderedApp.routes)
+        self.chain = renderedApp.middlewares
+        self.sessionStorage = sessionStorage
+        self.logger = logger
+    }
 
     func respond(to raw: CloudflarePageRequest) async -> CloudflarePageResponse {
         guard let method = HTTPRequest.Method(raw.method) else {
             return Self.encode(
                 Self.errorResponse(status: .badRequest, reason: "Unsupported HTTP method '\(raw.method)'")
             )
+        }
+
+        let match = matcher.match(method: method, path: raw.path)
+        let maximumBodySize: Int
+        switch match?.route.bodyStrategy {
+        case .collect(let configuredMaximum):
+            maximumBodySize = configuredMaximum ?? Self.defaultMaximumBodySize
+        case .stream, nil:
+            maximumBodySize = Self.defaultMaximumBodySize
         }
 
         let bodyBytes: [UInt8]?
@@ -91,18 +115,26 @@ struct CloudflarePageServer: Sendable {
                     Self.errorResponse(status: .badRequest, reason: "Request body is not valid base64")
                 )
             }
+            guard decoded.count <= maximumBodySize else {
+                return Self.encode(
+                    Self.errorResponse(
+                        status: .contentTooLarge,
+                        reason: "Request body exceeds the route's collection limit"
+                    )
+                )
+            }
             bodyBytes = decoded
         } else {
             bodyBytes = nil
         }
 
-        let match = matcher.match(method: method, path: raw.path)
         let headers = Self.headerFields(from: raw.headers)
         let cookieHeader = headers[values: .cookie].joined(separator: "; ")
         let cookies = CookieParser.parse(cookieHeader: cookieHeader)
         let session = CloudflareSessionBox(
             cookieValue: cookies[CloudflareSessionBox.cookieName],
-            storage: sessionStorage
+            storage: sessionStorage,
+            isSecure: raw.scheme == "https"
         )
         let webRequest = Self.webRequest(
             raw: raw,
@@ -112,7 +144,7 @@ struct CloudflarePageServer: Sendable {
             bodyBytes: bodyBytes,
             parameters: match?.parameters ?? PathParameters(),
             session: session,
-            application: application,
+            runtimeContext: runtimeContext,
             logger: logger
         )
 
@@ -143,7 +175,7 @@ struct CloudflarePageServer: Sendable {
         bodyBytes: [UInt8]?,
         parameters: PathParameters,
         session: CloudflareSessionBox,
-        application: CloudflareApplication,
+        runtimeContext: RequestRuntimeContext,
         logger: Logger
     ) -> Request {
         let queryString = raw.search.flatMap { $0.isEmpty ? nil : $0 }
@@ -166,7 +198,7 @@ struct CloudflarePageServer: Sendable {
             session: session.webSession,
             hasSession: session.hasExistingSession,
             logger: logger,
-            application: application,
+            runtimeContext: runtimeContext,
             remoteAddress: nil,
             parameters: parameters
         )
@@ -246,12 +278,13 @@ struct CloudflarePageServer: Sendable {
 
     // MARK: - Response encoding
 
-    /// Buffers streaming bodies before encoding: the JS boundary carries one
-    /// JSON message per response, so incremental delivery is not available on
-    /// this host yet.
+    /// Buffers streaming bodies within the bridge limit because the current
+    /// Worker/WASM ABI completes each response as one message.
     private static func encodeBuffering(_ response: Response, logger: Logger) async -> CloudflarePageResponse {
         if let produce = response.body.stream {
-            let collector = CollectingBodyWriter()
+            let collector = CollectingBodyWriter(
+                maximumBytes: defaultMaximumBodySize
+            )
             do {
                 try await produce(collector)
             } catch {
@@ -279,6 +312,7 @@ struct CloudflarePageServer: Sendable {
     static func errorResponse(status: HTTPResponse.Status, reason: String) -> Response {
         var headers = HTTPFields()
         headers[.contentType] = "application/json; charset=utf-8"
+        headers[.cacheControl] = "no-store"
         // Hand-assembled so the error path does not pull JSONEncoder into the
         // wasm binary; the wire shape stays `{"error":true,"reason":...}`,
         // matching the swift-http-server host.
@@ -373,9 +407,17 @@ private final class CloudflarePageErrorResponder: Responder {
 
 /// Collects a streaming body into memory for the single-message JS boundary.
 private actor CollectingBodyChunks {
+    let maximumBytes: Int
     private var bytes: [UInt8] = []
 
-    func append(_ chunk: [UInt8]) {
+    init(maximumBytes: Int) {
+        self.maximumBytes = maximumBytes
+    }
+
+    func append(_ chunk: [UInt8]) throws {
+        guard chunk.count <= maximumBytes - bytes.count else {
+            throw CloudflareResponseBodyTooLargeError()
+        }
         bytes.append(contentsOf: chunk)
     }
 
@@ -385,13 +427,19 @@ private actor CollectingBodyChunks {
 }
 
 private struct CollectingBodyWriter: BodyWriter {
-    private let chunks = CollectingBodyChunks()
+    private let chunks: CollectingBodyChunks
+
+    init(maximumBytes: Int) {
+        self.chunks = CollectingBodyChunks(maximumBytes: maximumBytes)
+    }
 
     func write(_ bytes: [UInt8]) async throws {
-        await chunks.append(bytes)
+        try await chunks.append(bytes)
     }
 
     func collected() async -> [UInt8] {
         await chunks.all()
     }
 }
+
+private struct CloudflareResponseBodyTooLargeError: Error {}
