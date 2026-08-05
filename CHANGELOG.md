@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - 2026-08-06
 
 ### Breaking
 
@@ -38,3 +38,8 @@
   `wrangler.jsonc` during typechecking instead of being shipped as stale input.
 - The current actor-enabled fixture size is recorded as a blocking production
   boundary rather than being presented as Embedded-compatible.
+- The package resolves the released SwiftWeb `0.9.0` rendering contract instead
+  of a moving branch dependency.
+- Native host tests, Standard and Embedded WASM host builds, Worker
+  typechecking and tests, and a Wrangler Worker-bundling dry run validate the
+  release boundaries.

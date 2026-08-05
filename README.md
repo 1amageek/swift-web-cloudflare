@@ -21,6 +21,15 @@ through SwiftWeb's host-neutral renderer.
 
 ## Add the package
 
+Depend on the released adapter from an application package:
+
+```swift
+.package(
+    url: "https://github.com/1amageek/swift-web-cloudflare.git",
+    from: "0.4.0"
+)
+```
+
 During cross-package development, keep SwiftWeb and this adapter as sibling
 checkouts and use path dependencies:
 

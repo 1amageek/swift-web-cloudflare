@@ -23,7 +23,7 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/1amageek/swift-web.git",
-            branch: "main",
+            from: "0.9.0",
             traits: [.trait(name: "Actors", condition: .when(traits: ["Actors"]))]
         ),
         .package(url: "https://github.com/1amageek/JavaScriptKit.git", from: "0.57.1"),
