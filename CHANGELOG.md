@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.0 - 2026-08-06
+
+### Breaking
+
+- Removed the `swiftweb-cloudflare` executable and installation command.
+- Replaced the bundled scaffold installer with `Adapter/sweb.json` components
+  discovered and executed by `sweb` through the SwiftPM package graph.
+- Added separate actor-enabled `worker` and Embedded `page-worker` Host and
+  Deployment artifact contracts.
+- Uses the host-neutral `SWIFTWEB_HOSTED_APPLICATION` build context and the
+  adapter package requirement resolved by `sweb`.
+- Makes the Wrangler dry run the final build gate and leaves only the real
+  remote mutation in the deploy operation.
+
 ## 0.4.0 - 2026-08-06
 
 ### Breaking

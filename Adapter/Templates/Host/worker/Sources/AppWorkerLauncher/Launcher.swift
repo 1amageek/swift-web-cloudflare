@@ -1,40 +1,42 @@
 import SwiftWebCloudflareHost
-import {{app.name}}
+import {{application.module}}
 
-private let cloudflareHost = CloudflareHost()
+private enum WorkerRuntime {
+    static let host = CloudflareHost()
+}
 
 @_expose(wasm, "renderApplication")
 @_cdecl("renderApplication")
 func renderApplication() {
-    cloudflareHost.render({{app.name}}())
+    WorkerRuntime.host.render({{application.type}}())
 }
 
 @_expose(wasm, "respondToRequest")
 @_cdecl("respondToRequest")
 func respondToRequest() {
-    cloudflareHost.respondToRequest()
+    WorkerRuntime.host.respondToRequest()
 }
 
 @_expose(wasm, "invokeActor")
 @_cdecl("invokeActor")
 func invokeActor() {
-    cloudflareHost.invokeActor()
+    WorkerRuntime.host.invokeActor()
 }
 
 @_expose(wasm, "openActorSocket")
 @_cdecl("openActorSocket")
 func openActorSocket() {
-    cloudflareHost.openActorSocket()
+    WorkerRuntime.host.openActorSocket()
 }
 
 @_expose(wasm, "receiveActorSocketMessage")
 @_cdecl("receiveActorSocketMessage")
 func receiveActorSocketMessage() {
-    cloudflareHost.receiveActorSocketMessage()
+    WorkerRuntime.host.receiveActorSocketMessage()
 }
 
 @_expose(wasm, "closeActorSocket")
 @_cdecl("closeActorSocket")
 func closeActorSocket() {
-    cloudflareHost.closeActorSocket()
+    WorkerRuntime.host.closeActorSocket()
 }

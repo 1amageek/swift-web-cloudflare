@@ -1,5 +1,5 @@
 {
-  "originHash" : "e9a5619a0e28d915f6e895b4507eff19fd79f0214a74f11c1de659a43a638ca6",
+  "originHash" : "5be2188eeb4d0e16aa694ca798c10f3f907ec80c2b55fde9468b3b14c508f551",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/JavaScriptKit.git",
       "state" : {
-        "revision" : "d5c45fd0f5fa49de26b477896473d10232534b80",
-        "version" : "0.57.1"
+        "revision" : "8067be4d2f907ab4a25614272f9e531fddd2ecfe",
+        "version" : "0.57.2"
       }
     },
     {
@@ -258,8 +258,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/swift-web.git",
       "state" : {
-        "revision" : "4fe4238fe68b41d34b39989dbd3563253ab470bf",
-        "version" : "0.9.0"
+        "revision" : "2faf33bffe11561bff538ee7baabc5834fa35f39",
+        "version" : "0.10.0"
       }
     }
   ],

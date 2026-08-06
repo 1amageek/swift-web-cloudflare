@@ -1,0 +1,198 @@
+{
+  "schemaVersion": 2,
+  "kind": "adapter",
+  "id": "swift-web-cloudflare",
+  "defaults": {
+    "host": "worker",
+    "deployment": "workers"
+  },
+  "hosts": {
+    "worker": {
+      "produces": ["swiftweb.cloudflare-worker-wasm"],
+      "templates": [
+        { "source": "Adapter/Templates/Host/worker", "destination": "wasm" }
+      ],
+      "variables": {
+        "cloudflare.adapterTraits": "",
+        "cloudflare.swiftSDK": "swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-07-23-a_wasm",
+        "cloudflare.swiftToolchain": "org.swift.64202607231a"
+      },
+      "operations": {
+        "build": [
+          {
+            "id": "swift-web-cloudflare.build-worker",
+            "kind": "command",
+            "executable": "sh",
+            "arguments": ["build.sh"],
+            "workingDirectory": "wasm",
+            "environment": {
+              "SWIFTWEB_HOSTED_APPLICATION": "1"
+            }
+          }
+        ]
+      }
+    },
+    "page-worker": {
+      "produces": ["swiftweb.cloudflare-page-wasm"],
+      "templates": [
+        { "source": "Adapter/Templates/Host/worker", "destination": "wasm" }
+      ],
+      "variables": {
+        "cloudflare.adapterTraits": ", traits: []",
+        "cloudflare.swiftSDK": "swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-07-23-a_wasm-embedded",
+        "cloudflare.swiftToolchain": "org.swift.64202607231a"
+      },
+      "operations": {
+        "build": [
+          {
+            "id": "swift-web-cloudflare.build-page-worker",
+            "kind": "command",
+            "executable": "sh",
+            "arguments": ["build.sh"],
+            "workingDirectory": "wasm",
+            "environment": {
+              "SWIFTWEB_HOSTED_APPLICATION": "1",
+              "JAVASCRIPTKIT_EXPERIMENTAL_EMBEDDED_WASM": "1"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "deployments": {
+    "workers": {
+      "accepts": ["swiftweb.cloudflare-worker-wasm"],
+      "produces": ["cloudflare.worker-version"],
+      "templates": [
+        { "source": "Adapter/Templates/Deployment/common", "destination": "cloudflare" },
+        { "source": "Adapter/Templates/Deployment/workers", "destination": "cloudflare" }
+      ],
+      "operations": {
+        "prepare": [
+          {
+            "id": "swift-web-cloudflare.install-dependencies",
+            "kind": "command",
+            "executable": "npm",
+            "arguments": ["ci"],
+            "workingDirectory": "cloudflare",
+            "inputs": ["cloudflare/package-lock.json"],
+            "outputs": ["cloudflare/node_modules/.package-lock.json"]
+          }
+        ],
+        "build": [
+          {
+            "id": "swift-web-cloudflare.typecheck",
+            "kind": "command",
+            "executable": "npm",
+            "arguments": ["run", "typecheck"],
+            "workingDirectory": "cloudflare",
+            "environment": { "SWIFTWEB_PROJECT_ROOT": "{{project.root}}" },
+            "dependsOn": ["swift-web-cloudflare.build-worker"]
+          },
+          {
+            "id": "swift-web-cloudflare.test",
+            "kind": "command",
+            "executable": "npm",
+            "arguments": ["test"],
+            "workingDirectory": "cloudflare",
+            "environment": { "SWIFTWEB_PROJECT_ROOT": "{{project.root}}" },
+            "dependsOn": ["swift-web-cloudflare.typecheck"]
+          },
+          {
+            "id": "swift-web-cloudflare.validate-deployment",
+            "kind": "command",
+            "executable": "npm",
+            "arguments": ["run", "deploy:check"],
+            "workingDirectory": "cloudflare",
+            "dependsOn": ["swift-web-cloudflare.test"]
+          }
+        ],
+        "dev": [
+          {
+            "id": "swift-web-cloudflare.dev",
+            "kind": "command",
+            "executable": "npm",
+            "arguments": ["run", "dev"],
+            "workingDirectory": "cloudflare"
+          }
+        ],
+        "deploy": [
+          {
+            "id": "swift-web-cloudflare.deploy",
+            "kind": "command",
+            "executable": "npm",
+            "arguments": ["run", "deploy"],
+            "workingDirectory": "cloudflare"
+          }
+        ]
+      }
+    },
+    "page-worker": {
+      "accepts": ["swiftweb.cloudflare-page-wasm"],
+      "produces": ["cloudflare.worker-version"],
+      "templates": [
+        { "source": "Adapter/Templates/Deployment/common", "destination": "cloudflare" },
+        { "source": "Adapter/Templates/Deployment/page-worker", "destination": "cloudflare" }
+      ],
+      "operations": {
+        "prepare": [
+          {
+            "id": "swift-web-cloudflare.install-dependencies",
+            "kind": "command",
+            "executable": "npm",
+            "arguments": ["ci"],
+            "workingDirectory": "cloudflare",
+            "inputs": ["cloudflare/package-lock.json"],
+            "outputs": ["cloudflare/node_modules/.package-lock.json"]
+          }
+        ],
+        "build": [
+          {
+            "id": "swift-web-cloudflare.typecheck",
+            "kind": "command",
+            "executable": "npm",
+            "arguments": ["run", "typecheck"],
+            "workingDirectory": "cloudflare",
+            "environment": { "SWIFTWEB_PROJECT_ROOT": "{{project.root}}" },
+            "dependsOn": ["swift-web-cloudflare.build-page-worker"]
+          },
+          {
+            "id": "swift-web-cloudflare.test",
+            "kind": "command",
+            "executable": "npm",
+            "arguments": ["test"],
+            "workingDirectory": "cloudflare",
+            "environment": { "SWIFTWEB_PROJECT_ROOT": "{{project.root}}" },
+            "dependsOn": ["swift-web-cloudflare.typecheck"]
+          },
+          {
+            "id": "swift-web-cloudflare.validate-deployment",
+            "kind": "command",
+            "executable": "npm",
+            "arguments": ["run", "deploy:check"],
+            "workingDirectory": "cloudflare",
+            "dependsOn": ["swift-web-cloudflare.test"]
+          }
+        ],
+        "dev": [
+          {
+            "id": "swift-web-cloudflare.dev",
+            "kind": "command",
+            "executable": "npm",
+            "arguments": ["run", "dev"],
+            "workingDirectory": "cloudflare"
+          }
+        ],
+        "deploy": [
+          {
+            "id": "swift-web-cloudflare.deploy",
+            "kind": "command",
+            "executable": "npm",
+            "arguments": ["run", "deploy"],
+            "workingDirectory": "cloudflare"
+          }
+        ]
+      }
+    }
+  }
+}

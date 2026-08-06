@@ -11,7 +11,6 @@ let package = Package(
     ],
     products: [
         .library(name: "SwiftWebCloudflareHost", targets: ["SwiftWebCloudflareHost"]),
-        .executable(name: "swiftweb-cloudflare", targets: ["swiftweb-cloudflare"]),
     ],
     // Forwards to swift-web's Actors trait (default-enabled). Disable for
     // page-serving-only Workers to keep Distributed/ActorRuntime out of the
@@ -23,18 +22,14 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/1amageek/swift-web.git",
-            from: "0.9.0",
+            from: "0.10.0",
             traits: [.trait(name: "Actors", condition: .when(traits: ["Actors"]))]
         ),
-        .package(url: "https://github.com/1amageek/JavaScriptKit.git", from: "0.57.1"),
+        // The deployment template vendors runtime.mjs from this exact release.
+        // Keep the Swift library and JavaScript runtime ABI on one version.
+        .package(url: "https://github.com/1amageek/JavaScriptKit.git", exact: "0.57.2"),
     ],
     targets: [
-        .executableTarget(
-            name: "swiftweb-cloudflare",
-            resources: [
-                .copy("Templates"),
-            ]
-        ),
         .target(
             name: "SwiftWebCloudflareHost",
             dependencies: [

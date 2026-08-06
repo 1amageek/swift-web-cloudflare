@@ -1,5 +1,5 @@
 {
-  "name": "{{app.kebabName}}-cloudflare",
+  "name": "{{application.kebabName}}-cloudflare",
   "private": true,
   "type": "module",
   "scripts": {

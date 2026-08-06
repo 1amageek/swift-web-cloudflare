@@ -6,11 +6,14 @@ on:
   pull_request:
 
 jobs:
-  # Typecheck and unit-test the Worker host that ships in the deploy scaffold.
-  # The Swift/WASM host build remains available through deploy/wasm/build.sh.
+  # Typecheck every Deployment component and unit-test the actor-enabled one.
+  # The Swift/WASM host build is owned by the adapter manifest.
   # This job validates the Worker boundary independently of the Swift toolchain.
   worker:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [workers, page-worker]
     steps:
       - uses: actions/checkout@v4
 
@@ -20,20 +23,25 @@ jobs:
 
       - name: Materialize the application template
         run: |
-          src="Sources/swiftweb-cloudflare/Templates/application/deploy/cloudflare"
-          work="$RUNNER_TEMP/worker"
-          cp -R "$src" "$work"
+          work="$RUNNER_TEMP/${{ matrix.component }}"
+          mkdir -p "$work"
+          cp -R Adapter/Templates/Deployment/common/. "$work"
+          cp -R "Adapter/Templates/Deployment/${{ matrix.component }}/." "$work"
           find "$work" -type f \( -name '*.json' -o -name '*.jsonc' -o -name '*.ts' \) \
-            -exec sed -i 's/{{app.kebabName}}/ci-app/g; s/{{app.name}}/CIApp/g; s/{{app.packageName}}/CIApp/g' {} +
+            -exec sed -i 's/{{application.kebabName}}/ci-app/g' {} +
+
+      - name: Validate adapter manifest
+        run: jq empty Adapter/sweb.json
 
       - name: Install
-        working-directory: ${{ runner.temp }}/worker
-        run: npm install --no-audit --no-fund
+        working-directory: ${{ runner.temp }}/${{ matrix.component }}
+        run: npm ci --no-audit --no-fund
 
       - name: Typecheck
-        working-directory: ${{ runner.temp }}/worker
+        working-directory: ${{ runner.temp }}/${{ matrix.component }}
         run: npm run typecheck
 
       - name: Test (auth claim logic)
-        working-directory: ${{ runner.temp }}/worker
+        if: matrix.component == 'workers'
+        working-directory: ${{ runner.temp }}/${{ matrix.component }}
         run: npm test
