@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "kind": "adapter",
   "id": "swift-web-cloudflare",
   "defaults": {
@@ -14,13 +14,25 @@
       ],
       "variables": {
         "cloudflare.adapterTraits": "",
-        "cloudflare.swiftSDK": "swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-07-23-a_wasm",
-        "cloudflare.swiftToolchain": "org.swift.64202607231a"
+        "cloudflare.swiftSDK": "swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-08-14-a_wasm",
+        "cloudflare.swiftToolchain": "org.swift.64202608141a"
       },
       "operations": {
         "build": [
           {
             "id": "swift-web-cloudflare.build-worker",
+            "kind": "command",
+            "executable": "sh",
+            "arguments": ["build.sh"],
+            "workingDirectory": "wasm",
+            "environment": {
+              "SWIFTWEB_HOSTED_APPLICATION": "1"
+            }
+          }
+        ],
+        "dev": [
+          {
+            "id": "swift-web-cloudflare.build-worker-for-development",
             "kind": "command",
             "executable": "sh",
             "arguments": ["build.sh"],
@@ -39,13 +51,26 @@
       ],
       "variables": {
         "cloudflare.adapterTraits": ", traits: []",
-        "cloudflare.swiftSDK": "swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-07-23-a_wasm-embedded",
-        "cloudflare.swiftToolchain": "org.swift.64202607231a"
+        "cloudflare.swiftSDK": "swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-08-14-a_wasm-embedded",
+        "cloudflare.swiftToolchain": "org.swift.64202608141a"
       },
       "operations": {
         "build": [
           {
             "id": "swift-web-cloudflare.build-page-worker",
+            "kind": "command",
+            "executable": "sh",
+            "arguments": ["build.sh"],
+            "workingDirectory": "wasm",
+            "environment": {
+              "SWIFTWEB_HOSTED_APPLICATION": "1",
+              "JAVASCRIPTKIT_EXPERIMENTAL_EMBEDDED_WASM": "1"
+            }
+          }
+        ],
+        "dev": [
+          {
+            "id": "swift-web-cloudflare.build-page-worker-for-development",
             "kind": "command",
             "executable": "sh",
             "arguments": ["build.sh"],
@@ -62,6 +87,20 @@
   "deployments": {
     "workers": {
       "accepts": ["swiftweb.cloudflare-worker-wasm"],
+      "acceptsServiceArtifacts": ["cloudflare.external-durable-object"],
+      "actorBindings": {
+        "cloudflare.external-durable-object": {
+          "hostRoute": {
+            "transport": "swiftweb.http",
+            "endpointPrefix": "cloudflare-do://{{service.name}}/"
+          },
+          "configuration": {
+            "bindingName": "{{service.cloudflare.bindingName}}",
+            "className": "{{service.cloudflare.className}}",
+            "scriptName": "{{service.cloudflare.workerName}}"
+          }
+        }
+      },
       "produces": ["cloudflare.worker-version"],
       "templates": [
         { "source": "Adapter/Templates/Deployment/common", "destination": "cloudflare" },
@@ -81,13 +120,21 @@
         ],
         "build": [
           {
+            "id": "swift-web-cloudflare.configure-actor-services",
+            "kind": "command",
+            "executable": "node",
+            "arguments": ["scripts/configure-actor-services.mjs"],
+            "workingDirectory": "cloudflare",
+            "dependsOn": ["swift-web-cloudflare.build-worker"]
+          },
+          {
             "id": "swift-web-cloudflare.typecheck",
             "kind": "command",
             "executable": "npm",
             "arguments": ["run", "typecheck"],
             "workingDirectory": "cloudflare",
             "environment": { "SWIFTWEB_PROJECT_ROOT": "{{project.root}}" },
-            "dependsOn": ["swift-web-cloudflare.build-worker"]
+            "dependsOn": ["swift-web-cloudflare.configure-actor-services"]
           },
           {
             "id": "swift-web-cloudflare.test",
@@ -101,8 +148,8 @@
           {
             "id": "swift-web-cloudflare.validate-deployment",
             "kind": "command",
-            "executable": "npm",
-            "arguments": ["run", "deploy:check"],
+            "executable": "node",
+            "arguments": ["scripts/validate-worker-bundle-size.mjs", "3145728"],
             "workingDirectory": "cloudflare",
             "dependsOn": ["swift-web-cloudflare.test"]
           }
@@ -111,9 +158,11 @@
           {
             "id": "swift-web-cloudflare.dev",
             "kind": "command",
+            "lifetime": "persistent",
             "executable": "npm",
             "arguments": ["run", "dev"],
-            "workingDirectory": "cloudflare"
+            "workingDirectory": "cloudflare",
+            "dependsOn": ["swift-web-cloudflare.build-worker-for-development"]
           }
         ],
         "deploy": [
@@ -128,7 +177,24 @@
       }
     },
     "page-worker": {
-      "accepts": ["swiftweb.cloudflare-page-wasm"],
+      "accepts": [
+        "swiftweb.cloudflare-page-wasm",
+        "swiftweb.cloudflare-worker-wasm"
+      ],
+      "acceptsServiceArtifacts": ["cloudflare.external-durable-object"],
+      "actorBindings": {
+        "cloudflare.external-durable-object": {
+          "hostRoute": {
+            "transport": "swiftweb.http",
+            "endpointPrefix": "cloudflare-do://{{service.name}}/"
+          },
+          "configuration": {
+            "bindingName": "{{service.cloudflare.bindingName}}",
+            "className": "{{service.cloudflare.className}}",
+            "scriptName": "{{service.cloudflare.workerName}}"
+          }
+        }
+      },
       "produces": ["cloudflare.worker-version"],
       "templates": [
         { "source": "Adapter/Templates/Deployment/common", "destination": "cloudflare" },
@@ -148,13 +214,21 @@
         ],
         "build": [
           {
+            "id": "swift-web-cloudflare.configure-actor-services",
+            "kind": "command",
+            "executable": "node",
+            "arguments": ["scripts/configure-actor-services.mjs"],
+            "workingDirectory": "cloudflare",
+            "dependsOn": ["swift-web-cloudflare.build-page-worker"]
+          },
+          {
             "id": "swift-web-cloudflare.typecheck",
             "kind": "command",
             "executable": "npm",
             "arguments": ["run", "typecheck"],
             "workingDirectory": "cloudflare",
             "environment": { "SWIFTWEB_PROJECT_ROOT": "{{project.root}}" },
-            "dependsOn": ["swift-web-cloudflare.build-page-worker"]
+            "dependsOn": ["swift-web-cloudflare.configure-actor-services"]
           },
           {
             "id": "swift-web-cloudflare.test",
@@ -168,8 +242,8 @@
           {
             "id": "swift-web-cloudflare.validate-deployment",
             "kind": "command",
-            "executable": "npm",
-            "arguments": ["run", "deploy:check"],
+            "executable": "node",
+            "arguments": ["scripts/validate-worker-bundle-size.mjs", "3145728"],
             "workingDirectory": "cloudflare",
             "dependsOn": ["swift-web-cloudflare.test"]
           }
@@ -178,9 +252,11 @@
           {
             "id": "swift-web-cloudflare.dev",
             "kind": "command",
+            "lifetime": "persistent",
             "executable": "npm",
             "arguments": ["run", "dev"],
-            "workingDirectory": "cloudflare"
+            "workingDirectory": "cloudflare",
+            "dependsOn": ["swift-web-cloudflare.build-page-worker-for-development"]
           }
         ],
         "deploy": [
@@ -194,5 +270,6 @@
         ]
       }
     }
-  }
+  },
+  "services": {}
 }

@@ -4,7 +4,7 @@ import FoundationEssentials
 import Foundation
 #endif
 import HTTPTypes
-#if canImport(Logging)
+#if !SWIFTWEB_PORTABLE_LOGGING
 import Logging
 #endif
 @_spi(Hosting) import SwiftWebCore

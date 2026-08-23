@@ -1,17 +1,8 @@
-#if SWIFTWEB_ACTORS
-@preconcurrency import ActorRuntime
-#if canImport(FoundationEssentials)
-import FoundationEssentials
-#elseif canImport(Foundation)
-import Foundation
-#endif
-#endif
-#if canImport(Logging)
+#if !SWIFTWEB_PORTABLE_LOGGING
 import Logging
 #endif
 import SwiftWebActors
 @_spi(Hosting) import SwiftWebCore
-import Synchronization
 
 /// A rendered SwiftWeb app bound to one Cloudflare WASM runtime.
 final class CloudflareAppInstallation: Sendable {
@@ -20,9 +11,6 @@ final class CloudflareAppInstallation: Sendable {
 
     #if SWIFTWEB_ACTORS
     private let actorSystem: WebActorSystem
-    private let actorSecurity: WebActorSecurityPolicy
-    private let sessions: WebSocketSessionRouter
-    private let sockets = Mutex<[Int: WebSocketActorTransport]>([:])
     #endif
 
     #if SWIFTWEB_ACTORS
@@ -31,9 +19,7 @@ final class CloudflareAppInstallation: Sendable {
         renderedApp: RenderedApp,
         sessionStorage: CloudflareSessionStorage,
         logger: Logger,
-        actorSystem: WebActorSystem,
-        actorSecurity: WebActorSecurityPolicy,
-        storageToken: Double?
+        actorSystem: WebActorSystem
     ) {
         self.runtimeID = runtimeID
         self.pageServer = CloudflarePageServer(
@@ -42,14 +28,6 @@ final class CloudflareAppInstallation: Sendable {
             logger: logger
         )
         self.actorSystem = actorSystem
-        self.actorSecurity = actorSecurity
-        self.sessions = WebSocketSessionRouter()
-        actorSystem.setTransport(sessions)
-        if let storageToken {
-            actorSystem.setPersistentStore(
-                DurableObjectActorStateStore(token: storageToken)
-            )
-        }
     }
     #else
     init(
@@ -72,67 +50,14 @@ final class CloudflareAppInstallation: Sendable {
     }
 
     #if SWIFTWEB_ACTORS
-    func invokeActor(
-        envelopeJSON: String,
-        principal: String?
-    ) async throws -> (callID: String, responseJSON: String) {
-        let envelope = try JSONDecoder().decode(
-            InvocationEnvelope.self,
-            from: Data(envelopeJSON.utf8)
+    func invokeActorFrame(
+        _ encodedFrame: [UInt8],
+        context: SwiftWebActorInvocationContext
+    ) async throws -> [UInt8]? {
+        try await actorSystem.invokeActorFrame(
+            encodedFrame,
+            context: context
         )
-        let context = WebActorInvocationContext(
-            transport: .http,
-            principalID: principal
-        )
-        let response = try await actorSystem.invoke(
-            envelope: envelope,
-            context: context,
-            authorization: actorSecurity.authorization,
-            activationPolicy: actorSecurity.activation
-        )
-        return (
-            envelope.callID,
-            String(decoding: try JSONEncoder().encode(response), as: UTF8.self)
-        )
-    }
-
-    func openSocket(id: Int, principal: String?) {
-        let transport = WebSocketActorTransport(
-            inboundSenderPolicy: .trustClientSupplied
-        ) { [runtimeID] text in
-            CloudflareWorkerBridge.sendSocketFrame(
-                runtimeID: runtimeID,
-                socketID: id,
-                frame: text
-            )
-        }
-        transport.bind(
-            actorSystem,
-            context: WebActorInvocationContext(
-                transport: .webSocket,
-                principalID: principal
-            ),
-            authorization: actorSecurity.authorization,
-            activationPolicy: actorSecurity.activation
-        )
-        transport.onInboundSender { [sessions] peerID, transport in
-            sessions.register(peerID, transport: transport)
-        }
-        sockets.withLock { $0[id] = transport }
-    }
-
-    func receiveSocketMessage(id: Int, frame: String) {
-        let transport = sockets.withLock { $0[id] }
-        transport?.receive(frame)
-    }
-
-    func closeSocket(id: Int) {
-        let transport = sockets.withLock { $0.removeValue(forKey: id) }
-        guard let transport else {
-            return
-        }
-        sessions.unregister(transport: transport)
-        transport.closed()
     }
     #endif
 }

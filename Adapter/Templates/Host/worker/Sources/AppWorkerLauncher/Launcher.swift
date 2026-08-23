@@ -1,8 +1,13 @@
 import SwiftWebCloudflareHost
 import {{application.module}}
+{{actors.swiftImports}}
 
 private enum WorkerRuntime {
-    static let host = CloudflareHost()
+    static let host = CloudflareHost(
+        actorServiceBindings: [
+{{actors.swiftServiceBindings}}
+        ]
+    )
 }
 
 @_expose(wasm, "renderApplication")
@@ -17,26 +22,8 @@ func respondToRequest() {
     WorkerRuntime.host.respondToRequest()
 }
 
-@_expose(wasm, "invokeActor")
-@_cdecl("invokeActor")
-func invokeActor() {
-    WorkerRuntime.host.invokeActor()
-}
-
-@_expose(wasm, "openActorSocket")
-@_cdecl("openActorSocket")
-func openActorSocket() {
-    WorkerRuntime.host.openActorSocket()
-}
-
-@_expose(wasm, "receiveActorSocketMessage")
-@_cdecl("receiveActorSocketMessage")
-func receiveActorSocketMessage() {
-    WorkerRuntime.host.receiveActorSocketMessage()
-}
-
-@_expose(wasm, "closeActorSocket")
-@_cdecl("closeActorSocket")
-func closeActorSocket() {
-    WorkerRuntime.host.closeActorSocket()
+@_expose(wasm, "invokeActorFrame")
+@_cdecl("invokeActorFrame")
+func invokeActorFrame() {
+    WorkerRuntime.host.invokeActorFrame()
 }

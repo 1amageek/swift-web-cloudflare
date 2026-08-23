@@ -1,13 +1,10 @@
-#if SWIFTWEB_ACTORS
-@preconcurrency import ActorRuntime
-#endif
 #if canImport(JavaScriptEventLoop)
 import JavaScriptEventLoop
 #endif
-#if canImport(Logging)
+#if !SWIFTWEB_PORTABLE_LOGGING
 import Logging
 #endif
-import SwiftWebActors
+@_spi(Hosting) import SwiftWebActors
 @_spi(Hosting) import SwiftWebCore
 import Synchronization
 
@@ -34,14 +31,21 @@ public final class CloudflareHost: Sendable {
     private let clientRuntime: ClientRuntimeConfiguration?
     private let sessionStorage: CloudflareSessionStorage
     private let logger: Logger
+    private let actorServiceBindings: [SwiftWebActorServiceBinding]
+    private let actorRequestClient: CloudflareActorRequestClient?
 
     public init(
         serverConfiguration: ServerConfiguration = ServerConfiguration(),
         clientRuntime: ClientRuntimeConfiguration? = nil,
+        actorServiceBindings: [SwiftWebActorServiceBinding] = [],
         logger: Logger = Logger(label: "swiftweb.host.cloudflare")
     ) {
         self.serverConfiguration = serverConfiguration
         self.clientRuntime = clientRuntime
+        self.actorServiceBindings = actorServiceBindings
+        self.actorRequestClient = actorServiceBindings.isEmpty
+            ? nil
+            : CloudflareActorRequestClient()
         self.sessionStorage = CloudflareSessionStorage()
         self.logger = logger
     }
@@ -92,12 +96,28 @@ public final class CloudflareHost: Sendable {
 
         Task {
             do {
+                #if SWIFTWEB_ACTORS || hasFeature(Embedded)
+                if let actorRequestClient {
+                    try app.actorSystem.installActorRequestClient(actorRequestClient)
+                }
+                #endif
+                #if SWIFTWEB_ACTORS
+                let persistentStore = identity.storageToken.map(
+                    DurableObjectActorStateStore.init(token:)
+                )
+                try await app.actorSystem.configureHosting(
+                    authorization: app.security.actors.authorization,
+                    activationPolicy: app.security.actors.activation,
+                    persistentStore: persistentStore
+                )
+                #endif
                 let renderedApp = try await AppRenderer.render(
                     app,
                     in: AppRenderingContext(
                         serverConfiguration: serverConfiguration,
                         clientRuntime: clientRuntime,
-                        developmentHooks: .disabled
+                        developmentHooks: .disabled,
+                        actorServiceBindings: actorServiceBindings
                     )
                 )
                 #if SWIFTWEB_ACTORS
@@ -106,9 +126,7 @@ public final class CloudflareHost: Sendable {
                     renderedApp: renderedApp,
                     sessionStorage: sessionStorage,
                     logger: logger,
-                    actorSystem: app.actorSystem,
-                    actorSecurity: app.security.actors,
-                    storageToken: identity.storageToken
+                    actorSystem: app.actorSystem
                 )
                 #else
                 let installation = CloudflareAppInstallation(
@@ -172,16 +190,16 @@ public final class CloudflareHost: Sendable {
         }
     }
 
-    /// Invokes the actor envelope currently presented by the bridge.
-    public func invokeActor() {
+    /// Invokes the binary actor frame currently presented by the bridge.
+    public func invokeActorFrame() {
         #if SWIFTWEB_ACTORS
-        let input: CloudflareActorInvocation
+        let input: CloudflareActorFrameInvocation
         do {
-            input = try CloudflareWorkerBridge.actorInvocation()
+            input = try CloudflareWorkerBridge.actorFrameInvocation()
         } catch {
-            CloudflareWorkerBridge.actorInvocationFailed(
+            CloudflareWorkerBridge.actorFrameInvocationFailed(
                 runtimeID: CloudflareWorkerBridge.currentRuntimeID ?? -1,
-                callID: "",
+                callID: CloudflareWorkerBridge.currentActorFrameCallID ?? "",
                 message: HostErrorText.of(error)
             )
             return
@@ -189,86 +207,44 @@ public final class CloudflareHost: Sendable {
 
         Task {
             guard let installation = readyInstallation(runtimeID: input.runtimeID) else {
-                CloudflareWorkerBridge.actorInvocationFailed(
+                CloudflareWorkerBridge.actorFrameInvocationFailed(
                     runtimeID: input.runtimeID,
-                    callID: CloudflareWorkerBridge.callID(in: input.envelopeJSON) ?? "",
+                    callID: input.callID,
                     message: "The Cloudflare app is not ready"
                 )
                 return
             }
-            let callID = CloudflareWorkerBridge.callID(in: input.envelopeJSON) ?? ""
             do {
-                let result = try await installation.invokeActor(
-                    envelopeJSON: input.envelopeJSON,
-                    principal: input.principal
+                let result = try await installation.invokeActorFrame(
+                    input.encodedFrame,
+                    context: SwiftWebActorInvocationContext(
+                        principalID: input.principalID,
+                        sessionID: input.sessionID,
+                        tenantID: input.tenantID,
+                        remoteAddress: input.remoteAddress,
+                        peerID: input.peerID,
+                        hostedActorIdentity: input.hostedActorIdentity
+                    )
                 )
-                CloudflareWorkerBridge.actorInvocationCompleted(
+                CloudflareWorkerBridge.actorFrameInvocationCompleted(
                     runtimeID: input.runtimeID,
-                    callID: result.callID,
-                    responseJSON: result.responseJSON
-                )
-            } catch let error as WebActorAuthorizationError {
-                CloudflareWorkerBridge.actorInvocationDenied(
-                    runtimeID: input.runtimeID,
-                    callID: callID,
-                    reason: error.reason
+                    callID: input.callID,
+                    encodedFrame: result
                 )
             } catch {
-                CloudflareWorkerBridge.actorInvocationFailed(
+                CloudflareWorkerBridge.actorFrameInvocationFailed(
                     runtimeID: input.runtimeID,
-                    callID: callID,
+                    callID: input.callID,
                     message: HostErrorText.of(error)
                 )
             }
         }
         #else
-        CloudflareWorkerBridge.actorInvocationFailed(
+        CloudflareWorkerBridge.actorFrameInvocationFailed(
             runtimeID: CloudflareWorkerBridge.currentRuntimeID ?? -1,
-            callID: "",
+            callID: CloudflareWorkerBridge.currentActorFrameCallID ?? "",
             message: "Actor support is disabled"
         )
-        #endif
-    }
-
-    public func openActorSocket() {
-        #if SWIFTWEB_ACTORS
-        do {
-            let input = try CloudflareWorkerBridge.socketInput()
-            guard let installation = readyInstallation(runtimeID: input.runtimeID) else {
-                throw CloudflareHostError.notReady
-            }
-            installation.openSocket(id: input.socketID, principal: input.principal)
-        } catch {
-            logger.error("Failed to open actor socket: \(HostErrorText.of(error))")
-        }
-        #endif
-    }
-
-    public func receiveActorSocketMessage() {
-        #if SWIFTWEB_ACTORS
-        do {
-            let input = try CloudflareWorkerBridge.socketMessage()
-            guard let installation = readyInstallation(runtimeID: input.runtimeID) else {
-                throw CloudflareHostError.notReady
-            }
-            installation.receiveSocketMessage(id: input.socketID, frame: input.frame)
-        } catch {
-            logger.error("Failed to receive actor socket message: \(HostErrorText.of(error))")
-        }
-        #endif
-    }
-
-    public func closeActorSocket() {
-        #if SWIFTWEB_ACTORS
-        do {
-            let input = try CloudflareWorkerBridge.socketInput()
-            guard let installation = readyInstallation(runtimeID: input.runtimeID) else {
-                throw CloudflareHostError.notReady
-            }
-            installation.closeSocket(id: input.socketID)
-        } catch {
-            logger.error("Failed to close actor socket: \(HostErrorText.of(error))")
-        }
         #endif
     }
 

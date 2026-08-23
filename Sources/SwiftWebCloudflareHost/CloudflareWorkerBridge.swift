@@ -1,11 +1,5 @@
-#if SWIFTWEB_ACTORS
-#if canImport(FoundationEssentials)
-import FoundationEssentials
-#elseif canImport(Foundation)
-import Foundation
-#endif
-#endif
 import JavaScriptKit
+@_spi(Hosting) import SwiftWebCore
 
 struct CloudflareRenderingIdentity: Sendable {
     let runtimeID: Int
@@ -13,22 +7,16 @@ struct CloudflareRenderingIdentity: Sendable {
     let storageToken: Double?
 }
 
-struct CloudflareActorInvocation: Sendable {
+struct CloudflareActorFrameInvocation: Sendable {
     let runtimeID: Int
-    let envelopeJSON: String
-    let principal: String?
-}
-
-struct CloudflareSocketInput: Sendable {
-    let runtimeID: Int
-    let socketID: Int
-    let principal: String?
-}
-
-struct CloudflareSocketMessage: Sendable {
-    let runtimeID: Int
-    let socketID: Int
-    let frame: String
+    let callID: String
+    let encodedFrame: [UInt8]
+    let principalID: String?
+    let sessionID: String?
+    let tenantID: String?
+    let remoteAddress: String?
+    let peerID: String
+    let hostedActorIdentity: String?
 }
 
 /// The string-and-number ABI between the generated Worker and Swift/WASM.
@@ -43,6 +31,10 @@ enum CloudflareWorkerBridge {
 
     static var currentRequestCallID: String? {
         nonEmpty(JSObject.global.__swiftWebRequestCallID.string)
+    }
+
+    static var currentActorFrameCallID: String? {
+        nonEmpty(JSObject.global.__swiftWebActorFrameCallID.string)
     }
 
     static func renderingIdentity() throws -> CloudflareRenderingIdentity {
@@ -84,43 +76,32 @@ enum CloudflareWorkerBridge {
         )
     }
 
-    static func actorInvocation() throws -> CloudflareActorInvocation {
+    static func actorFrameInvocation() throws -> CloudflareActorFrameInvocation {
         guard let runtimeID = currentRuntimeID else {
             throw CloudflareHostError.invalidBridgeValue("runtimeID")
         }
-        guard let envelopeJSON = JSObject.global.__swiftWebActorEnvelope.string else {
-            throw CloudflareHostError.invalidBridgeValue("actorEnvelope")
+        guard let callID = currentActorFrameCallID else {
+            throw CloudflareHostError.invalidBridgeValue("actorFrameCallID")
         }
-        return CloudflareActorInvocation(
+        guard let encodedFrame = JSObject.global.__swiftWebActorFrameBase64.string,
+              let frame = Base64Coding.decode(encodedFrame) else {
+            throw CloudflareHostError.invalidBridgeValue("actorFrame")
+        }
+        guard let peerID = nonEmpty(JSObject.global.__swiftWebActorPeerID.string) else {
+            throw CloudflareHostError.invalidBridgeValue("actorPeerID")
+        }
+        return CloudflareActorFrameInvocation(
             runtimeID: runtimeID,
-            envelopeJSON: envelopeJSON,
-            principal: nonEmpty(JSObject.global.__swiftWebPrincipal.string)
-        )
-    }
-
-    static func socketInput() throws -> CloudflareSocketInput {
-        guard let runtimeID = currentRuntimeID else {
-            throw CloudflareHostError.invalidBridgeValue("runtimeID")
-        }
-        guard let socketID = integer(JSObject.global.__swiftWebSocketID.number) else {
-            throw CloudflareHostError.invalidBridgeValue("socketID")
-        }
-        return CloudflareSocketInput(
-            runtimeID: runtimeID,
-            socketID: socketID,
-            principal: nonEmpty(JSObject.global.__swiftWebSocketPrincipal.string)
-        )
-    }
-
-    static func socketMessage() throws -> CloudflareSocketMessage {
-        let input = try socketInput()
-        guard let frame = JSObject.global.__swiftWebSocketFrame.string else {
-            throw CloudflareHostError.invalidBridgeValue("socketFrame")
-        }
-        return CloudflareSocketMessage(
-            runtimeID: input.runtimeID,
-            socketID: input.socketID,
-            frame: frame
+            callID: callID,
+            encodedFrame: frame,
+            principalID: nonEmpty(JSObject.global.__swiftWebActorPrincipalID.string),
+            sessionID: nonEmpty(JSObject.global.__swiftWebActorSessionID.string),
+            tenantID: nonEmpty(JSObject.global.__swiftWebActorTenantID.string),
+            remoteAddress: nonEmpty(JSObject.global.__swiftWebActorRemoteAddress.string),
+            peerID: peerID,
+            hostedActorIdentity: nonEmpty(
+                JSObject.global.__swiftWebHostedActorIdentity.string
+            )
         )
     }
 
@@ -165,57 +146,25 @@ enum CloudflareWorkerBridge {
         )
     }
 
-    static func actorInvocationCompleted(
+    static func actorFrameInvocationCompleted(
         runtimeID: Int,
         callID: String,
-        responseJSON: String
+        encodedFrame: [UInt8]?
     ) {
-        _ = function(named: "swiftWebDidInvokeActor")?(
+        _ = function(named: "swiftWebDidInvokeActorFrame")?(
             Double(runtimeID),
             callID,
-            responseJSON
+            encodedFrame.map(Base64Coding.encode) ?? ""
         )
     }
 
-    static func actorInvocationDenied(runtimeID: Int, callID: String, reason: String) {
-        _ = function(named: "swiftWebActorInvocationDenied")?(
-            Double(runtimeID),
-            callID,
-            reason
-        )
-    }
-
-    static func actorInvocationFailed(runtimeID: Int, callID: String, message: String) {
-        _ = function(named: "swiftWebActorInvocationFailed")?(
+    static func actorFrameInvocationFailed(runtimeID: Int, callID: String, message: String) {
+        _ = function(named: "swiftWebActorFrameInvocationFailed")?(
             Double(runtimeID),
             callID,
             message
         )
     }
-
-    static func sendSocketFrame(runtimeID: Int, socketID: Int, frame: String) {
-        _ = function(named: "swiftWebSendSocketFrame")?(
-            Double(runtimeID),
-            Double(socketID),
-            frame
-        )
-    }
-
-    #if SWIFTWEB_ACTORS
-    static func callID(in envelopeJSON: String) -> String? {
-        struct CallIDProbe: Decodable {
-            let callID: String?
-        }
-        do {
-            return try JSONDecoder().decode(
-                CallIDProbe.self,
-                from: Data(envelopeJSON.utf8)
-            ).callID
-        } catch {
-            return nil
-        }
-    }
-    #endif
 
     private static func integer(_ value: Double?) -> Int? {
         guard let value,

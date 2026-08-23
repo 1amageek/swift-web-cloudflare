@@ -17,6 +17,14 @@ interface PageResult {
   bodyBase64: string;
 }
 
+export interface ActorFrameInvocationContext {
+  principalID?: string;
+  sessionID?: string;
+  tenantID?: string;
+  remoteAddress?: string;
+  peerID: string;
+}
+
 interface BridgeGlobals {
   __swiftWebRuntimeID?: number;
   __swiftWebRenderingID?: number;
@@ -24,8 +32,13 @@ interface BridgeGlobals {
   __swiftWebStorageActorID?: string;
   __swiftWebStorageBlob?: string;
   __swiftWebStorageResult?: string;
-  __swiftWebActorEnvelope?: string;
-  __swiftWebPrincipal?: string;
+  __swiftWebActorFrameCallID?: string;
+  __swiftWebActorFrameBase64?: string;
+  __swiftWebActorPrincipalID?: string;
+  __swiftWebActorSessionID?: string;
+  __swiftWebActorTenantID?: string;
+  __swiftWebActorRemoteAddress?: string;
+  __swiftWebActorPeerID?: string;
   __swiftWebRequestCallID?: string;
   __swiftWebRequestMethod?: string;
   __swiftWebRequestPath?: string;
@@ -34,9 +47,6 @@ interface BridgeGlobals {
   __swiftWebRequestHost?: string;
   __swiftWebRequestHeaders?: string;
   __swiftWebRequestBodyBase64?: string;
-  __swiftWebSocketID?: number;
-  __swiftWebSocketPrincipal?: string;
-  __swiftWebSocketFrame?: string;
   swiftWebDidRender(runtimeID: number, renderingID: number): void;
   swiftWebRenderingFailed(runtimeID: number, renderingID: number, message: string): void;
   swiftWebDidRespond(
@@ -47,26 +57,29 @@ interface BridgeGlobals {
     bodyBase64: string
   ): void;
   swiftWebResponseFailed(runtimeID: number, callID: string, message: string): void;
-  swiftWebDidInvokeActor(runtimeID: number, callID: string, responseJSON: string): void;
-  swiftWebActorInvocationDenied(runtimeID: number, callID: string, reason: string): void;
-  swiftWebActorInvocationFailed(runtimeID: number, callID: string, message: string): void;
-  swiftWebSendSocketFrame(runtimeID: number, socketID: number, frame: string): void;
+  swiftWebDidInvokeActorFrame(
+    runtimeID: number,
+    callID: string,
+    responseBase64: string
+  ): void;
+  swiftWebActorFrameInvocationFailed(
+    runtimeID: number,
+    callID: string,
+    message: string
+  ): void;
   swiftWebLoadActorState(): void;
   swiftWebSaveActorState(): void;
 }
 
 const bridge = globalThis as typeof globalThis & BridgeGlobals;
 
-class ActorInvocationDeniedError extends Error {}
-
 export class ApplicationRuntime {
   private nextRenderingID = 1;
   private nextRequestID = 1;
-  private nextSocketID = 1;
+  private nextActorFrameID = 1;
   private readonly rendering = new Map<number, Pending<void>>();
   private readonly requests = new Map<string, Pending<PageResult>>();
-  private readonly invocations = new Map<string, Pending<string>>();
-  private readonly sockets = new Map<number, WebSocket>();
+  private readonly actorFrames = new Map<string, Pending<Uint8Array | null>>();
 
   constructor(
     readonly id: number,
@@ -142,44 +155,34 @@ export class ApplicationRuntime {
     });
   }
 
-  invokeActor(envelopeJSON: string, principal: string): Promise<string> {
-    const callID = invocationCallID(envelopeJSON);
-    return new Promise<string>((resolve, reject) => {
-      this.invocations.set(callID, { resolve, reject });
+  invokeActorFrame(
+    frame: Uint8Array,
+    context: ActorFrameInvocationContext
+  ): Promise<Uint8Array | null> {
+    if (!(frame instanceof Uint8Array)) {
+      throw new TypeError("Actor frame must be Uint8Array");
+    }
+    if (context.peerID.length === 0) {
+      throw new TypeError("Actor frame peer identity is empty");
+    }
+    const callID = `actor-frame-${this.nextActorFrameID++}`;
+    return new Promise<Uint8Array | null>((resolve, reject) => {
+      this.actorFrames.set(callID, { resolve, reject });
       this.prepareBridge();
-      bridge.__swiftWebActorEnvelope = envelopeJSON;
-      bridge.__swiftWebPrincipal = principal;
+      bridge.__swiftWebActorFrameCallID = callID;
+      bridge.__swiftWebActorFrameBase64 = bytesToBase64(frame);
+      bridge.__swiftWebActorPrincipalID = context.principalID ?? "";
+      bridge.__swiftWebActorSessionID = context.sessionID ?? "";
+      bridge.__swiftWebActorTenantID = context.tenantID ?? "";
+      bridge.__swiftWebActorRemoteAddress = context.remoteAddress ?? "";
+      bridge.__swiftWebActorPeerID = context.peerID;
       try {
-        this.callExport("invokeActor");
+        this.callExport("invokeActorFrame");
       } catch (error) {
-        this.invocations.delete(callID);
+        this.actorFrames.delete(callID);
         reject(asError(error));
       }
     });
-  }
-
-  openSocket(socket: WebSocket, principal: string): number {
-    const socketID = this.nextSocketID++;
-    this.sockets.set(socketID, socket);
-    this.prepareBridge();
-    bridge.__swiftWebSocketID = socketID;
-    bridge.__swiftWebSocketPrincipal = principal;
-    this.callExport("openActorSocket");
-    return socketID;
-  }
-
-  receiveSocketMessage(socketID: number, frame: string): void {
-    this.prepareBridge();
-    bridge.__swiftWebSocketID = socketID;
-    bridge.__swiftWebSocketFrame = frame;
-    this.callExport("receiveActorSocketMessage");
-  }
-
-  closeSocket(socketID: number): void {
-    this.prepareBridge();
-    bridge.__swiftWebSocketID = socketID;
-    this.callExport("closeActorSocket");
-    this.sockets.delete(socketID);
   }
 
   renderingCompleted(renderingID: number): void {
@@ -202,23 +205,16 @@ export class ApplicationRuntime {
     this.requests.delete(callID);
   }
 
-  actorInvocationCompleted(callID: string, responseJSON: string): void {
-    this.invocations.get(callID)?.resolve(responseJSON);
-    this.invocations.delete(callID);
+  actorFrameInvocationCompleted(callID: string, responseBase64: string): void {
+    this.actorFrames.get(callID)?.resolve(
+      responseBase64.length > 0 ? base64ToBytes(responseBase64) : null
+    );
+    this.actorFrames.delete(callID);
   }
 
-  actorInvocationDenied(callID: string, reason: string): void {
-    this.invocations.get(callID)?.reject(new ActorInvocationDeniedError(reason));
-    this.invocations.delete(callID);
-  }
-
-  actorInvocationFailed(callID: string, message: string): void {
-    this.invocations.get(callID)?.reject(new Error(message));
-    this.invocations.delete(callID);
-  }
-
-  sendSocketFrame(socketID: number, frame: string): void {
-    this.sockets.get(socketID)?.send(frame);
+  actorFrameInvocationFailed(callID: string, message: string): void {
+    this.actorFrames.get(callID)?.reject(new Error(message));
+    this.actorFrames.delete(callID);
   }
 
   private prepareBridge(): void {
@@ -280,17 +276,11 @@ bridge.swiftWebDidRespond = (runtimeID, callID, status, headersWire, bodyBase64)
 bridge.swiftWebResponseFailed = (runtimeID, callID, message) => {
   registry.runtime(runtimeID)?.responseFailed(callID, message);
 };
-bridge.swiftWebDidInvokeActor = (runtimeID, callID, responseJSON) => {
-  registry.runtime(runtimeID)?.actorInvocationCompleted(callID, responseJSON);
+bridge.swiftWebDidInvokeActorFrame = (runtimeID, callID, responseBase64) => {
+  registry.runtime(runtimeID)?.actorFrameInvocationCompleted(callID, responseBase64);
 };
-bridge.swiftWebActorInvocationDenied = (runtimeID, callID, reason) => {
-  registry.runtime(runtimeID)?.actorInvocationDenied(callID, reason);
-};
-bridge.swiftWebActorInvocationFailed = (runtimeID, callID, message) => {
-  registry.runtime(runtimeID)?.actorInvocationFailed(callID, message);
-};
-bridge.swiftWebSendSocketFrame = (runtimeID, socketID, frame) => {
-  registry.runtime(runtimeID)?.sendSocketFrame(socketID, frame);
+bridge.swiftWebActorFrameInvocationFailed = (runtimeID, callID, message) => {
+  registry.runtime(runtimeID)?.actorFrameInvocationFailed(callID, message);
 };
 bridge.swiftWebLoadActorState = () => {
   const storageToken = bridge.__swiftWebStorageToken;
@@ -375,22 +365,6 @@ export async function createApplicationRuntime(
   swift.setInstance(instance);
   wasi.initialize(wasiInstance(instance));
   return registry.register(instance, durableStorage);
-}
-
-export function isActorInvocationDenied(error: unknown): boolean {
-  return error instanceof ActorInvocationDeniedError;
-}
-
-function invocationCallID(envelopeJSON: string): string {
-  const parsed: unknown = JSON.parse(envelopeJSON);
-  if (!isRecord(parsed) || typeof parsed.callID !== "string" || parsed.callID.length === 0) {
-    throw new Error("Actor invocation envelope is missing callID");
-  }
-  return parsed.callID;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function asError(error: unknown): Error {

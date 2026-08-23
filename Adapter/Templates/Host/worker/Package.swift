@@ -23,6 +23,7 @@ let package = Package(
                     package: "{{application.packageIdentity}}"
                 ),
                 .product(name: "SwiftWebCloudflareHost", package: "swift-web-cloudflare"),
+{{actors.swiftProductDependencies}}
             ],
             linkerSettings: [
                 .linkedLibrary("swiftUnicodeDataTables", .when(platforms: [.wasi])),

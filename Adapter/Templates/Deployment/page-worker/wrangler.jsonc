@@ -13,5 +13,11 @@
   ],
   "observability": {
     "enabled": true
+  },
+  "durable_objects": {
+    "bindings": [
+      /* SWIFTWEB_EXTERNAL_ACTOR_BINDINGS_BEGIN */
+      /* SWIFTWEB_EXTERNAL_ACTOR_BINDINGS_END */
+    ]
   }
 }

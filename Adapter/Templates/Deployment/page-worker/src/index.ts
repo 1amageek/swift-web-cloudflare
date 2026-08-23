@@ -1,4 +1,5 @@
 import { pageApplicationRuntime } from "./application-runtime";
+import { installSwiftWebActorServices } from "./actor-services";
 import {
   RequestBodyTooLargeError,
   errorResponse,
@@ -6,7 +7,8 @@ import {
 } from "./http";
 
 export default {
-  async fetch(request: Request): Promise<Response> {
+  async fetch(request: Request, environment: Env): Promise<Response> {
+    installSwiftWebActorServices(environment);
     const url = new URL(request.url);
     if (url.pathname === "/_swiftweb/health") {
       return new Response("ok", {

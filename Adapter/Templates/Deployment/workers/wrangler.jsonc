@@ -17,6 +17,8 @@
         "name": "SWIFTWEB_ACTOR",
         "class_name": "SwiftWebActorObject"
       }
+      /* SWIFTWEB_EXTERNAL_ACTOR_BINDINGS_BEGIN */
+      /* SWIFTWEB_EXTERNAL_ACTOR_BINDINGS_END */
     ]
   },
   "migrations": [

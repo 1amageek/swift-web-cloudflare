@@ -33,12 +33,13 @@ Select the adapter in the application's source-controlled `sweb.json`:
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "application": {
     "product": "MyApp",
     "module": "MyApp",
     "type": "MyApp"
   },
+  "services": {},
   "environments": {
     "production": {
       "host": "swift-web-cloudflare/worker",
@@ -58,9 +59,30 @@ Select the adapter in the application's source-controlled `sweb.json`:
 | Component | Responsibility | Swift/WASM profile |
 |---|---|---|
 | Host `worker` | Pages, endpoints, distributed actors, and actor sockets | Regular WASM with `Actors` |
-| Host `page-worker` | Pages and endpoints without distributed actors | Embedded WASM with `Actors` disabled |
+| Host `page-worker` | Pages and endpoints with generated remote Actor references | Embedded WASM with `Actors` |
 | Deployment `workers` | Worker plus SQLite Durable Object actor routing | Accepts `worker` artifact |
-| Deployment `page-worker` | Page-serving Worker without actor bindings | Accepts `page-worker` artifact |
+| Deployment `page-worker` | Page-serving Worker with external Durable Object actor-service bindings | Accepts `page-worker` artifact |
+
+Both deployments accept the `cloudflare.external-durable-object` service
+artifact. An application may therefore declare a separately built and deployed
+Durable Object service. Only its Actor contract product is linked for generated
+type metadata; the service implementation remains outside the page WASM. The
+deployment adapter owns binding names, class names, `script_name`, and route
+templates.
+
+```mermaid
+flowchart LR
+  Swift[".actor(Type.self, identity:)"] --> Host["CloudflareHost"]
+  Host --> Request["binary request/reply ActorTransport"]
+  Request --> Binding["external service binding"]
+  Binding --> DO["getByName(identity)"]
+  DO --> Service["Swift Distributed Actor host"]
+```
+
+The generated bridge forwards the same logical identity to `getByName` and to
+the hosted Swift invocation context. A missing, duplicate, or ambiguous binding
+fails explicitly. The adapter does not accept identity or arbitrary Swift
+expressions from its manifest.
 
 The artifact contract prevents pairing a page-only Host with an actor
 Deployment or vice versa.
@@ -81,9 +103,16 @@ sweb deploy --environment production
 
 ```text
 .swiftweb/generated/environments/production/workspace/
+├── services/     independently materialized service workspaces, when selected
 ├── wasm/         generated Swift package and launcher
 └── cloudflare/   Worker source, Wrangler configuration, and Node dependencies
 ```
+
+`sweb dev` builds the selected Host artifact first, then supervises the
+Cloudflare development Worker together with every selected persistent service.
+Wrangler generates binding declarations inside this materialized workspace
+before TypeScript checking; application overlays do not own a checked-in copy
+of environment-specific binding types.
 
 The generated launcher owns one `CloudflareHost` and forwards semantic event
 functions:
@@ -100,8 +129,9 @@ func renderApplication() {
 }
 ```
 
-Request, actor, and socket exports forward to the same host instance. Adapter
-templates are generated state; application-specific Wrangler configuration and
+Request, actor, and socket exports forward to the same host instance. Generated
+external Actor service bindings are passed to `CloudflareHost` at construction.
+Adapter templates are generated state; application-specific Wrangler configuration and
 verification belong in application overlays and lifecycle tasks.
 
 The Host build sets `SWIFTWEB_HOSTED_APPLICATION=1` while SwiftPM resolves and
@@ -127,7 +157,7 @@ other Hosts are rendered through SwiftWeb's host-neutral `AppRenderer`.
 ## Toolchain and size boundary
 
 Both components use the matching Swift 6.4 development snapshot dated
-2026-07-23. `page-worker` uses the matching Embedded WASM SDK. `worker` remains
+2026-08-14. `page-worker` uses the matching Embedded WASM SDK. `worker` remains
 on regular WASM while `swift-actor-runtime` requires Foundation.
 
 The deployment template vendors the JavaScriptKit runtime used to instantiate
@@ -137,9 +167,11 @@ Swift imports and JavaScript functions retain one ABI.
 
 The actor-enabled graph is not currently suitable for a 3 MiB upload budget.
 On 2026-08-05, Wrangler 4.119.0 measured the optimized fixture at 48,714 KiB
-upload / 19,134 KiB gzip. `sweb build` runs the Wrangler dry-run gate, and
+upload / 19,134 KiB gzip. `sweb build` runs Wrangler's dry-run bundler and
+checks the compressed size of the complete upload, not the WASM module alone.
 `sweb deploy` reruns that build before the real deployment. Actor behavior is
-not silently removed to meet a size limit.
+not silently removed to meet a size limit. The Host build also pins Binaryen so
+the optimized artifact is reproducible.
 
 See [CloudflareHostRendering.md](Documentation/CloudflareHostRendering.md) for
 the ownership and lifecycle contract and
