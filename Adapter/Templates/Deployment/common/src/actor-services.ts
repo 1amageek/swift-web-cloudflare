@@ -78,13 +78,13 @@ export function createSwiftWebActorRequestHandler(
       endpoint.startsWith(service.hostRoute.endpointPrefix)
         && endpoint.endsWith(service.hostRoute.endpointSuffix)
     );
-    if (matches.length === 0) {
+    const match = matches[0];
+    if (!match) {
       throw new TypeError("Actor service endpoint has no deployment binding");
     }
     if (matches.length > 1) {
       throw new TypeError("Actor service endpoint has ambiguous deployment bindings");
     }
-    const match = matches[0];
     const identityEnd = match.hostRoute.endpointSuffix.length === 0
       ? endpoint.length
       : endpoint.length - match.hostRoute.endpointSuffix.length;

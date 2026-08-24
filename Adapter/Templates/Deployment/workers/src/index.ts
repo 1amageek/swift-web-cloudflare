@@ -54,6 +54,7 @@ export default {
           .invokeActorFrame(frame, {
             principalID: authentication.uid ?? undefined,
             peerID,
+            hostedActorIdentity: actorIdentity,
           });
         return new Response(result, {
           status: result === null ? 204 : 200,

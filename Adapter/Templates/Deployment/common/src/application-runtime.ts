@@ -1,7 +1,14 @@
 import { WASI, File, OpenFile, ConsoleStdout } from "@bjorn3/browser_wasi_shim";
 import { SwiftRuntime } from "./runtime.mjs";
 import wasmModule from "./app.wasm";
+import {
+  type ActorFrameInvocationBridge,
+  type ActorFrameInvocationContext,
+  writeActorFrameInvocationContext,
+} from "./actor-frame-invocation";
 import { readBoundedBytes } from "./http";
+
+export type { ActorFrameInvocationContext } from "./actor-frame-invocation";
 
 const HEADER_SEPARATOR = "\u001f";
 const PAGE_BODY_LIMIT = 16 * 1024 * 1024;
@@ -17,15 +24,7 @@ interface PageResult {
   bodyBase64: string;
 }
 
-export interface ActorFrameInvocationContext {
-  principalID?: string;
-  sessionID?: string;
-  tenantID?: string;
-  remoteAddress?: string;
-  peerID: string;
-}
-
-interface BridgeGlobals {
+interface BridgeGlobals extends ActorFrameInvocationBridge {
   __swiftWebRuntimeID?: number;
   __swiftWebRenderingID?: number;
   __swiftWebStorageToken?: number;
@@ -34,11 +33,6 @@ interface BridgeGlobals {
   __swiftWebStorageResult?: string;
   __swiftWebActorFrameCallID?: string;
   __swiftWebActorFrameBase64?: string;
-  __swiftWebActorPrincipalID?: string;
-  __swiftWebActorSessionID?: string;
-  __swiftWebActorTenantID?: string;
-  __swiftWebActorRemoteAddress?: string;
-  __swiftWebActorPeerID?: string;
   __swiftWebRequestCallID?: string;
   __swiftWebRequestMethod?: string;
   __swiftWebRequestPath?: string;
@@ -162,20 +156,13 @@ export class ApplicationRuntime {
     if (!(frame instanceof Uint8Array)) {
       throw new TypeError("Actor frame must be Uint8Array");
     }
-    if (context.peerID.length === 0) {
-      throw new TypeError("Actor frame peer identity is empty");
-    }
     const callID = `actor-frame-${this.nextActorFrameID++}`;
     return new Promise<Uint8Array | null>((resolve, reject) => {
       this.actorFrames.set(callID, { resolve, reject });
       this.prepareBridge();
       bridge.__swiftWebActorFrameCallID = callID;
       bridge.__swiftWebActorFrameBase64 = bytesToBase64(frame);
-      bridge.__swiftWebActorPrincipalID = context.principalID ?? "";
-      bridge.__swiftWebActorSessionID = context.sessionID ?? "";
-      bridge.__swiftWebActorTenantID = context.tenantID ?? "";
-      bridge.__swiftWebActorRemoteAddress = context.remoteAddress ?? "";
-      bridge.__swiftWebActorPeerID = context.peerID;
+      writeActorFrameInvocationContext(bridge, context);
       try {
         this.callExport("invokeActorFrame");
       } catch (error) {

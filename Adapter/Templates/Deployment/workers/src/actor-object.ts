@@ -4,6 +4,10 @@ import {
   type ApplicationRuntime,
   createApplicationRuntime,
 } from "./application-runtime";
+import {
+  namedActorIdentity,
+  requireMatchingActorIdentity,
+} from "./actor-identity";
 import { swiftWebActorFrameLimits } from "./actor-frame-limits";
 import { errorResponse, logError, readBoundedBytes } from "./http";
 
@@ -16,6 +20,12 @@ const PRINCIPAL_HEADER = "X-SwiftWeb-Principal";
 /// only the Cloudflare object/WASM lifetime and bounded byte transfer.
 export class SwiftWebActorObject extends DurableObject<Env> {
   private ready?: Promise<ApplicationRuntime>;
+  private readonly actorIdentity: string;
+
+  constructor(state: DurableObjectState, environment: Env) {
+    super(state, environment);
+    this.actorIdentity = namedActorIdentity(state.id);
+  }
 
   private applicationRuntime(): Promise<ApplicationRuntime> {
     if (!this.ready) {
@@ -42,6 +52,10 @@ export class SwiftWebActorObject extends DurableObject<Env> {
     if (frame.byteLength > swiftWebActorFrameLimits.maximumFrameByteCount) {
       throw new RangeError("Actor frame exceeds the Cloudflare transport limit");
     }
+    requireMatchingActorIdentity(
+      this.actorIdentity,
+      context.hostedActorIdentity,
+    );
     const response = await (await this.applicationRuntime()).invokeActorFrame(
       frame,
       context
@@ -69,6 +83,7 @@ export class SwiftWebActorObject extends DurableObject<Env> {
       const response = await this.invokeActorFrame(frame, {
         principalID: request.headers.get(PRINCIPAL_HEADER) ?? undefined,
         peerID,
+        hostedActorIdentity: this.actorIdentity,
       });
       return new Response(response, {
         status: response === null ? 204 : 200,
