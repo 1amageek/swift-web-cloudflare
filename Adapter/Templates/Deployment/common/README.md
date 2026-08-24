@@ -24,7 +24,8 @@ sweb dev
 ```
 
 The selected Host component determines whether the generated launcher uses
-regular actor-enabled WASM or page-only Embedded WASM.
+regular WASM with local actor hosting or Embedded WASM with external concrete
+actor references.
 
 `npm run typecheck` regenerates `worker-configuration.d.ts` from
 `wrangler.jsonc` before running TypeScript. The generated declaration is not

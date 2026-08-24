@@ -64,27 +64,8 @@ pending operation.
 - Cloudflare configuration and bindings remain in `wrangler.jsonc`; they are not
   exposed through SwiftWeb's `App`.
 
-The host library has two verified target capabilities: regular WASM with the
-`Actors` trait, and Embedded WASM without it. The generated Durable Object
-application selects regular WASM because `swift-actor-runtime` currently needs
-Foundation. Platform selection never changes a declared actor application into
-a page-only application.
-
-This is also a production size boundary, not only a compiler distinction. The
-minimal actor-enabled fixture measured 48,714 KiB upload / 19,134 KiB gzip with
-Wrangler 4.119.0 on 2026-08-05, so it does not satisfy a 3 MiB deployment
-budget. The actor-enabled Embedded graph remains a dependency requirement; no
-page-only fallback is treated as actor support.
-
-## Removed architecture
-
-The following concepts are intentionally absent:
-
-- `CloudflareApplication: ApplicationProtocol`
-- Cloudflare-owned scene lowering and service registration
-- `CloudflareActorHost.start(App.Type)`
-- the `swiftwebStart` ABI export
-- separate `new` and `chat` deployment implementations
-
-Generated applications migrate directly to `CloudflareHost.render(app)` and the
-single `application` scaffold.
+The host library has two verified target capabilities: regular WASM with local
+actor hosting, and Embedded WASM with generated concrete references to actors
+hosted by selected Service applications. Platform selection does not change
+the Swift actor method surface or move logical identity into deployment
+configuration.

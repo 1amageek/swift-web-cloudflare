@@ -90,8 +90,8 @@ RPC as a cancellable operation, so the remote invocation may continue; the
 bridge still observes its eventual fulfillment or rejection to avoid an
 unhandled Promise while reporting cancellation to Swift immediately.
 
-The artifact contract prevents pairing a page-only Host with an actor
-Deployment or vice versa.
+The artifact contract rejects any Host and Deployment combination whose
+produced and accepted artifact kinds do not match.
 
 ## Commands
 
@@ -171,13 +171,11 @@ the generated WASM. `Package.swift` therefore pins the matching JavaScriptKit
 release exactly; update the package version and `runtime.mjs` together so the
 Swift imports and JavaScript functions retain one ABI.
 
-The actor-enabled graph is not currently suitable for a 3 MiB upload budget.
-On 2026-08-05, Wrangler 4.119.0 measured the optimized fixture at 48,714 KiB
-upload / 19,134 KiB gzip. `sweb build` runs Wrangler's dry-run bundler and
-checks the compressed size of the complete upload, not the WASM module alone.
-`sweb deploy` reruns that build before the real deployment. Actor behavior is
-not silently removed to meet a size limit. The Host build also pins Binaryen so
-the optimized artifact is reproducible.
+`sweb build` runs Wrangler's dry-run bundler and checks the compressed size of
+the complete upload, not the WASM module alone. `sweb deploy` reruns that build
+before the real deployment. Actor behavior is not silently removed to meet a
+size limit. The Host build also pins Binaryen so the optimized artifact is
+reproducible.
 
 See [CloudflareHostRendering.md](Documentation/CloudflareHostRendering.md) for
 the ownership and lifecycle contract and
