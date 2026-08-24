@@ -1,3 +1,5 @@
+import { resolveActorRequestUnlessCancelled } from "./actor-request-cancellation.ts";
+
 const ACTOR_FRAME_MEDIA_TYPE = "application/vnd.swift-actor-frame";
 
 export interface ActorServiceRoute {
@@ -70,10 +72,6 @@ export function createSwiftWebActorRequestHandler(
     if (typeof peerID !== "string" || peerID.length === 0) {
       throw new TypeError("Actor service peer identity is missing");
     }
-    if (isAborted(signal)) {
-      throw new DOMException("Actor request was cancelled", "AbortError");
-    }
-
     const matches = services.filter((service) =>
       endpoint.startsWith(service.hostRoute.endpointPrefix)
         && endpoint.endsWith(service.hostRoute.endpointSuffix)
@@ -103,13 +101,14 @@ export function createSwiftWebActorRequestHandler(
         `Actor service binding '${match.configuration.bindingName}' is unavailable`,
       );
     }
-    const result = await namespace.getByName(identity).invokeActorFrame(
-      frame,
-      { peerID, hostedActorIdentity: identity },
+    const result = await resolveActorRequestUnlessCancelled(
+      () =>
+        namespace.getByName(identity).invokeActorFrame(
+          frame,
+          { peerID, hostedActorIdentity: identity },
+        ),
+      signal,
     );
-    if (isAborted(signal)) {
-      throw new DOMException("Actor request was cancelled", "AbortError");
-    }
     return new Response(result, {
       status: result === null ? 204 : 200,
       headers: result === null
@@ -117,11 +116,4 @@ export function createSwiftWebActorRequestHandler(
         : { "content-type": ACTOR_FRAME_MEDIA_TYPE },
     });
   };
-}
-
-function isAborted(value: unknown): boolean {
-  return typeof value === "object"
-    && value !== null
-    && "aborted" in value
-    && value.aborted === true;
 }

@@ -84,6 +84,12 @@ the hosted Swift invocation context. A missing, duplicate, or ambiguous binding
 fails explicitly. The adapter does not accept identity or arbitrary Swift
 expressions from its manifest.
 
+Cancelling the calling Swift task aborts its bridge wait even when the
+underlying Durable Object RPC has not settled. Cloudflare does not expose that
+RPC as a cancellable operation, so the remote invocation may continue; the
+bridge still observes its eventual fulfillment or rejection to avoid an
+unhandled Promise while reporting cancellation to Swift immediately.
+
 The artifact contract prevents pairing a page-only Host with an actor
 Deployment or vice versa.
 

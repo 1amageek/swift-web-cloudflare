@@ -102,12 +102,11 @@ private actor CloudflareActorRequestDriver {
                     await self.abort(requestID: requestID)
                 }
             }
-        } catch is CancellationError {
-            throw ActorSystemError.cancelled
-        } catch let error as ActorSystemError {
-            throw error
         } catch {
-            throw ActorSystemError.transportClosed
+            throw CloudflareActorRequestFailure.actorSystemError(
+                for: error,
+                taskWasCancelled: Task.isCancelled
+            )
         }
     }
 

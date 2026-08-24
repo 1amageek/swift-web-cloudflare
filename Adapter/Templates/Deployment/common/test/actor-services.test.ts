@@ -169,3 +169,93 @@ test("does not return a reply after cancellation wins the race", async () => {
     (error: unknown) => error instanceof DOMException && error.name === "AbortError",
   );
 });
+
+test("settles promptly when an in-flight Durable Object RPC does not settle", async () => {
+  const controller = new AbortController();
+  const handler = createSwiftWebActorRequestHandler(
+    {
+      DATABASE_SERVICE: {
+        getByName() {
+          return {
+            invokeActorFrame(): Promise<Uint8Array> {
+              return new Promise(() => undefined);
+            },
+          };
+        },
+      },
+    },
+    [databaseBinding],
+  );
+
+  const request = handler(
+    "cloudflare-do://database/database?scope=primary",
+    new Uint8Array([1]),
+    controller.signal,
+    "page-runtime",
+  );
+  controller.abort();
+
+  await assert.rejects(
+    completesWithin(request, 100),
+    (error: unknown) => error instanceof DOMException && error.name === "AbortError",
+  );
+});
+
+test("observes a remote rejection after local cancellation", async () => {
+  const controller = new AbortController();
+  let rejectRemoteRequest: ((error: Error) => void) | undefined;
+  const handler = createSwiftWebActorRequestHandler(
+    {
+      DATABASE_SERVICE: {
+        getByName() {
+          return {
+            invokeActorFrame(): Promise<Uint8Array> {
+              return new Promise((_resolve, reject) => {
+                rejectRemoteRequest = reject;
+              });
+            },
+          };
+        },
+      },
+    },
+    [databaseBinding],
+  );
+
+  const request = handler(
+    "cloudflare-do://database/database?scope=primary",
+    new Uint8Array([1]),
+    controller.signal,
+    "page-runtime",
+  );
+  controller.abort();
+  await assert.rejects(
+    completesWithin(request, 100),
+    (error: unknown) => error instanceof DOMException && error.name === "AbortError",
+  );
+
+  assert.notEqual(rejectRemoteRequest, undefined);
+  rejectRemoteRequest?.(new Error("Remote request completed after cancellation"));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+});
+
+async function completesWithin<Result>(
+  operation: Promise<Result>,
+  timeoutMilliseconds: number,
+): Promise<Result> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("Actor request did not settle after cancellation")),
+          timeoutMilliseconds,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}
