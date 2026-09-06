@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 3,
+  "kind": "adapter",
+  "id": "embedded-page-service",
+  "defaults": {},
+  "hosts": {},
+  "deployments": {},
+  "services": {
+    "proxy": {
+      "produces": ["cloudflare.external-durable-object"]
+    }
+  }
+}

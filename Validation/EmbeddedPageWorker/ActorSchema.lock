@@ -1,0 +1,227 @@
+{
+  "actors" : [
+    {
+      "fields" : [
+        {
+          "fieldID" : 1,
+          "hasDefaultValue" : true,
+          "isOptional" : false,
+          "sourceName" : "entered",
+          "type" : "Int"
+        },
+        {
+          "fieldID" : 2,
+          "hasDefaultValue" : true,
+          "isOptional" : false,
+          "sourceName" : "active",
+          "type" : "Int"
+        },
+        {
+          "fieldID" : 3,
+          "hasDefaultValue" : true,
+          "isOptional" : false,
+          "sourceName" : "cancelled",
+          "type" : "Int"
+        },
+        {
+          "fieldID" : 4,
+          "hasDefaultValue" : true,
+          "isOptional" : false,
+          "sourceName" : "completed",
+          "type" : "Int"
+        }
+      ],
+      "methods" : [
+        {
+          "canonicalSignature" : "counts()->[Int]:async:throws",
+          "compilerTargetAliases" : [
+            {
+              "targetIdentifier" : "$s12EmbeddedPage10ProbeActorC6countsSaySiGyYaKFTE",
+              "toolchainFingerprint" : "swiftc-d2d377a9b66c040c0cb1cfbd1250d9e3"
+            }
+          ],
+          "errorType" : "throws",
+          "methodID" : 12178969817613948251,
+          "parameters" : [
+
+          ],
+          "resultType" : "[Int]",
+          "sourceName" : "counts"
+        },
+        {
+          "canonicalSignature" : "hold()->Int:async:throws",
+          "compilerTargetAliases" : [
+            {
+              "targetIdentifier" : "$s12EmbeddedPage10ProbeActorC4holdSiyYaKFTE",
+              "toolchainFingerprint" : "swiftc-d2d377a9b66c040c0cb1cfbd1250d9e3"
+            }
+          ],
+          "errorType" : "throws",
+          "methodID" : 4367908598085992514,
+          "parameters" : [
+
+          ],
+          "resultType" : "Int",
+          "sourceName" : "hold"
+        },
+        {
+          "canonicalSignature" : "increment(_:Int)->Int:async:throws",
+          "compilerTargetAliases" : [
+            {
+              "targetIdentifier" : "$s12EmbeddedPage10ProbeActorC9incrementyS2iYaKFTE",
+              "toolchainFingerprint" : "swiftc-d2d377a9b66c040c0cb1cfbd1250d9e3"
+            }
+          ],
+          "errorType" : "throws",
+          "methodID" : 3420237365518446714,
+          "parameters" : [
+            {
+              "fieldID" : 1,
+              "label" : "_",
+              "type" : "Int"
+            }
+          ],
+          "resultType" : "Int",
+          "sourceName" : "increment"
+        },
+        {
+          "canonicalSignature" : "validate(_:Int)->Int:async:throws(ProbeFailure)",
+          "compilerTargetAliases" : [
+            {
+              "targetIdentifier" : "$s12EmbeddedPage10ProbeActorC8validateyS2iYaKFTE",
+              "toolchainFingerprint" : "swiftc-d2d377a9b66c040c0cb1cfbd1250d9e3"
+            }
+          ],
+          "errorType" : "throws(ProbeFailure)",
+          "methodID" : 2121359899527835194,
+          "parameters" : [
+            {
+              "fieldID" : 1,
+              "label" : "_",
+              "type" : "Int"
+            }
+          ],
+          "resultType" : "Int",
+          "sourceName" : "validate"
+        },
+        {
+          "canonicalSignature" : "waitForObservation()->Void:async:throws",
+          "compilerTargetAliases" : [
+            {
+              "targetIdentifier" : "$s12EmbeddedPage10ProbeActorC18waitForObservationyyYaKFTE",
+              "toolchainFingerprint" : "swiftc-d2d377a9b66c040c0cb1cfbd1250d9e3"
+            }
+          ],
+          "errorType" : "throws",
+          "methodID" : 885194205416603406,
+          "parameters" : [
+
+          ],
+          "resultType" : "Void",
+          "sourceName" : "waitForObservation"
+        }
+      ],
+      "moduleName" : "EmbeddedPage",
+      "reservedFieldIDs" : [
+
+      ],
+      "schemaFingerprint" : {
+        "high" : 8274926920765383869,
+        "low" : 3494402900463071396
+      },
+      "sourcePath" : "ProbeActor.swift",
+      "sourceSymbol" : "EmbeddedPage.ProbeActor",
+      "typeID" : {
+        "high" : 17954858052394914352,
+        "low" : 4438845342384119079
+      }
+    }
+  ],
+  "formatVersion" : 3,
+  "moduleName" : "EmbeddedPage",
+  "packageIdentity" : "embeddedpageworker",
+  "reservedActorTypeIDs" : [
+
+  ],
+  "reservedMethodIDs" : [
+
+  ],
+  "reservedValueTypeIDs" : [
+
+  ],
+  "valueTypes" : [
+    {
+      "canonicalType" : "Swift.Int",
+      "cases" : [
+
+      ],
+      "fields" : [
+
+      ],
+      "reservedCaseIDs" : [
+
+      ],
+      "reservedFieldIDs" : [
+
+      ],
+      "sourceType" : "Int",
+      "typeID" : {
+        "high" : 17136416053037652511,
+        "low" : 11586992519881825816
+      }
+    },
+    {
+      "canonicalType" : "EmbeddedPage.ProbeFailure",
+      "cases" : [
+        {
+          "associatedValues" : [
+            {
+              "fieldID" : 1,
+              "label" : "_",
+              "type" : "Int"
+            }
+          ],
+          "caseID" : 1,
+          "reservedAssociatedValueFieldIDs" : [
+
+          ],
+          "sourceName" : "rejected"
+        }
+      ],
+      "fields" : [
+
+      ],
+      "reservedCaseIDs" : [
+
+      ],
+      "reservedFieldIDs" : [
+
+      ],
+      "sourceType" : "ProbeFailure",
+      "typeID" : {
+        "high" : 5083208986239108502,
+        "low" : 16878556961169394453
+      }
+    },
+    {
+      "canonicalType" : "Swift.Array<Swift.Int>",
+      "cases" : [
+
+      ],
+      "fields" : [
+
+      ],
+      "reservedCaseIDs" : [
+
+      ],
+      "reservedFieldIDs" : [
+
+      ],
+      "sourceType" : "[Int]",
+      "typeID" : {
+        "high" : 4600700369463515987,
+        "low" : 8781246992969537266
+      }
+    }
+  ]
+}

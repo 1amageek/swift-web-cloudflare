@@ -1,0 +1,5 @@
+.build/
+.generated/
+.swiftweb/
+.wrangler/
+Sources/EmbeddedPage/ActorSystemGenerated/

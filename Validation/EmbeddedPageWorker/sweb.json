@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 3,
+  "application": {"product": "EmbeddedPage", "module": "EmbeddedPage", "type": "EmbeddedPage"},
+  "services": {
+    "probe": {
+      "application": {"product": "EmbeddedPage", "module": "EmbeddedPage", "type": "EmbeddedPage"},
+      "adapter": "embedded-page-service/proxy",
+      "actors": [{"product": "EmbeddedPage", "module": "EmbeddedPage", "type": "ProbeActor"}],
+      "variables": {
+        "cloudflare.bindingName": "PROBE",
+        "cloudflare.className": "ProbeDurableObject",
+        "cloudflare.workerName": "embedded-page-native-proxy"
+      }
+    }
+  },
+  "environments": {
+    "local": {"host": "swift-web/http-server", "deployment": "swift-web/local"},
+    "embedded": {
+      "host": "swift-web-cloudflare/page-worker",
+      "deployment": "swift-web-cloudflare/page-worker",
+      "services": ["probe"]
+    }
+  },
+  "defaults": {"build": "embedded", "dev": null, "deploy": null}
+}

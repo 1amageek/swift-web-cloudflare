@@ -77,6 +77,16 @@ authored WebActorSystem actor + schema lock
 - The Native peer is a real `WebActorSystem` facade backed by
   `SwiftActorSystem`; it uses the generated registration and the existing
   SwiftWeb HTTP frame-admission path.
+- The fixture binds `primary` and `observer` through the same `ProbeActor`
+  service-route template. The generated Embedded page constructs both
+  addresses with `ProbeActor.actorTypeDescriptor.id`. In the authored Native
+  actor, `observer` constructs the `primary` address from its assigned
+  `id.type`; `SwiftActorSystem` derives that value from the same generated
+  registration descriptor and rejects a local actor whose assigned type does
+  not match it. The fixture therefore neither hand-writes a type ID nor makes
+  authored source depend on a generated descriptor extension. It does not add
+  an Actor type or adapter route. The `@RemoteActor` page binding remains
+  `primary`, while an explicitly resolved generated client reaches `observer`.
 - The workerd path performs an actual
   `DurableObjectNamespace.getByName(identity).invokeActorFrame` call. The proxy
   transports owned frame bytes to the Native peer; it does not implement Actor
@@ -117,10 +127,14 @@ authored WebActorSystem actor + schema lock
 3. The generated Embedded actor client sends an owned frame through the
    Cloudflare request client. The bound Durable Object namespace selects the
    identity, invokes the proxy RPC, and forwards the bytes to the Native HTTP
-   endpoint.
+   endpoint. Calls under observation use the distinct `observer` address so
+   they do not queue behind the `primary` address's execution gate.
 4. The Native `WebActorSystem` admits the frame, delegates to its
    `SwiftActorSystem` backend, and returns the encoded result or exact failure
-   through the same boundaries.
+   through the same boundaries. `observer.counts()` resolves `primary` in that
+   same actor system with the observer's assigned `id.type`, then uses
+   `whenLocal` to read the counters under the primary actor's isolation; the
+   observer owns no mirrored counter or shared storage.
 5. Cancellation and scoped deadline cases abort their pending request without
    leaking a later completion. The Embedded application then shuts down its
    Actor Core and observes a later-call rejection. The Native `/shutdown`
@@ -149,6 +163,23 @@ must not share task-scoped options or leave pending work after cancellation.
 The shared timeout-helper regression executes normal exit, command failure,
 timeout, SIGINT, and SIGTERM cases and rejects any surviving descendant.
 
+The pinned Embedded baseline provides neither `Task.sleep(for:)` nor the
+throwing `Task.sleep(nanoseconds:)`, so the page does not implement its 2.1-second
+no-late-completion grace locally. After cancellation and deadline it awaits one
+ordinary generated `ProbeActor.waitForObservation()` RPC per grace, for two
+calls total; the Native actor performs each 2.1-second grace using Native
+`Task.sleep`. The Native host intentionally serializes distributed invocations
+for one exact address until execution finishes, so state checks do not call
+`counts()` on the in-flight `primary` address. `waitForCounts` instead makes at
+most 50 ordinary generated `observer.counts()` RPCs, with no added sleep or
+yield; the observer resolves `primary` with
+`ActorAddress(type: id.type, identity: "primary")`
+and reads it only through `whenLocal`. The outer harness enforces a 20-second
+wall-clock bound. This Native observation path is not deadline-clock evidence:
+the 750-millisecond caller deadline must still originate in
+`ActorCallOptions.withValue` and execute through the production
+`CloudflareActorClock`.
+
 JavaScript and HTTP boundaries may copy owned frame bytes as required by their
 ABIs. This fixture makes no zero-copy claim and must not replace those boundaries
 with an in-process shortcut.
@@ -167,6 +198,7 @@ processes have terminated.
 | Actor success crosses namespace/RPC and Native dispatch | JavaScript returns a fixture value directly. |
 | Exact typed application and system failures remain distinct | Either failure becomes a success or generic substitute. |
 | In-flight cancellation prevents later completion | The request reports cancellation while work remains live. |
+| `observer.counts()` sees the primary state while `primary.hold()` owns its address gate | Counts are queued behind the in-flight primary RPC, stored in shared/global fixture state, or the authored Native source depends on the generated descriptor extension instead of its registered `id.type`. |
 | Scoped deadline uses the Cloudflare clock | Timeout is injected at the Native boundary or synthesized by HTTP. |
 | Embedded Core shutdown completes and a later call is rejected | Only the Worker process is stopped. |
 | Worker and Native process cleanup meet the runner deadline | The assertions pass but a child process or pending timer remains. |
