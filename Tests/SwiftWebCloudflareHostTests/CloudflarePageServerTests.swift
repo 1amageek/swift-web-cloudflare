@@ -12,6 +12,18 @@ import XCTest
 @testable import SwiftWebCloudflareHost
 
 final class CloudflarePageServerTests: XCTestCase {
+    func testWorkerBuildTemplateDoesNotInjectSwiftWebRoot() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let buildScript = packageRoot
+            .appendingPathComponent("Adapter/Templates/Host/worker/build.sh")
+        let source = try String(contentsOf: buildScript, encoding: .utf8)
+
+        XCTAssertFalse(source.contains("SWIFT_WEB_ROOT"))
+    }
+
     func testServesRoutesFromRenderedApp() async throws {
         let renderedApp = try await AppRenderer.render(
             CloudflareFixtureApp(),

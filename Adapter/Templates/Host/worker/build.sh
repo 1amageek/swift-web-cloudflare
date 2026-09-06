@@ -4,7 +4,6 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 SCRATCH_PATH="$HERE/.build/worker"
 SWIFT_SDK="{{cloudflare.swiftSDK}}"
 SWIFT_TOOLCHAIN="{{cloudflare.swiftToolchain}}"
-SWIFT_WEB_ROOT="{{adapter.swift-web.root}}"
 export ARCHS="$(uname -m)"
 export ONLY_ACTIVE_ARCH=YES
 export SWIFT_COMPILATION_MODE=singlefile
@@ -19,7 +18,6 @@ if [ ! -f "$UNICODE_LIBRARY_DIRECTORY/libswiftUnicodeDataTables.a" ]; then
   echo "Matching Swift Unicode archive was not found for $SWIFT_SDK" >&2
   exit 1
 fi
-SWIFT_WEB_ROOT="$SWIFT_WEB_ROOT" \
 TOOLCHAINS="$SWIFT_TOOLCHAIN" /usr/bin/swift build \
   --scratch-path "$SCRATCH_PATH" \
   --swift-sdk "$SWIFT_SDK" \
