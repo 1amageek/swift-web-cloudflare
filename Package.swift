@@ -18,7 +18,7 @@ if let swiftWebRoot = Context.environment["SWIFT_WEB_ROOT"] {
 } else {
     swiftWebDependency = .package(
         url: "https://github.com/1amageek/swift-web.git",
-        from: "0.10.0",
+        revision: "10ab5465af363907950c78c3e018c0713d87b8be",
         traits: swiftWebTraits
     )
 }
@@ -84,6 +84,7 @@ let package = Package(
                     condition: .when(platforms: [.wasi])
                 ),
             ],
+            exclude: ["DESIGN.md"],
             swiftSettings: [
                 .define("SWIFTWEB_ACTORS", .when(traits: ["Actors"])),
             ] + (usesSwiftWebPortableLogging

@@ -23,6 +23,7 @@ public final class CloudflareHost: Sendable {
 
     private struct State: Sendable {
         var executorInstalled = false
+        var actorClockInstalled = false
         var phase = Phase.idle
     }
 
@@ -96,6 +97,12 @@ public final class CloudflareHost: Sendable {
 
         Task {
             do {
+                #if hasFeature(Embedded)
+                if !state.withLock({ $0.actorClockInstalled }) {
+                    let installed = try app.actorSystem.installActorClock(CloudflareActorClock())
+                    state.withLock { $0.actorClockInstalled = installed }
+                }
+                #endif
                 #if SWIFTWEB_ACTORS || hasFeature(Embedded)
                 if let actorRequestClient {
                     try app.actorSystem.installActorRequestClient(actorRequestClient)

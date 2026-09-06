@@ -171,6 +171,13 @@ the generated WASM. `Package.swift` therefore pins the matching JavaScriptKit
 release exactly; update the package version and `runtime.mjs` together so the
 Swift imports and JavaScript functions retain one ABI.
 
+The Embedded `page-worker` host installs a cancellable `scheduler.wait` clock
+for the default Actor system before rendering. Custom Actor-system clocks are
+preserved. See the [clock contract](Sources/SwiftWebCloudflareHost/DESIGN.md)
+and [local workerd validation](Validation/ActorClock/README.md). Unreleased main
+pins the reviewed SwiftWeb commit that provides this hosting SPI; a future
+semver release must replace that revision with a released dependency version.
+
 `sweb build` runs Wrangler's dry-run bundler and checks the compressed size of
 the complete upload, not the WASM module alone. `sweb deploy` reruns that build
 before the real deployment. Actor behavior is not silently removed to meet a
