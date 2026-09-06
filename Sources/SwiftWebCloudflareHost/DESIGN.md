@@ -4,7 +4,8 @@
 
 This module is a child of the [package design](../../DESIGN.md). Existing
 rendering and shared-state responsibilities remain in the linked contracts;
-this document owns the platform deadline-clock boundary.
+this document owns the platform deadline-clock and Actor request-client
+installation boundaries.
 
 ## Responsibilities and Boundaries
 
@@ -12,6 +13,9 @@ this document owns the platform deadline-clock boundary.
 An application-owned custom clock is not replaced. `CloudflareActorClock`
 implements the existing `ActorClock` protocol using the native Worker timer;
 ActorSystemCore continues to own invocation deadlines and cancellation.
+When generated service bindings exist, the host installs the request client
+that forwards owned Actor frames to the JavaScript service bridge. It does not
+host a local Embedded distributed actor or own Actor Core shutdown.
 
 ## Related Designs
 
@@ -20,7 +24,7 @@ ActorSystemCore continues to own invocation deadlines and cancellation.
 | [Package](../../DESIGN.md) | parent | Profiles and dependency provenance | Keep browser and host capabilities distinct. |
 | [Rendering](../../Documentation/CloudflareHostRendering.md) | coordinates with | One app render and bridge ownership | Install after render reservation and before AppRenderer. |
 | [Concurrency](../../Documentation/CloudflareHostConcurrency.md) | coordinates with | Common owner/isolation on all targets | JavaScript objects stay inside the clock driver actor. |
-| [SwiftWeb Actors](https://github.com/1amageek/swift-web/blob/main/Sources/SwiftWebRuntime/Actors/DESIGN.md) | depends on | `installActorClock(_:)` | First deadline-clock use seals the shared binding. |
+| [SwiftWeb Actors](https://github.com/1amageek/swift-web/blob/main/Sources/SwiftWebRuntime/Actors/DESIGN.md) | depends on | `installActorClock(_:)`, `installActorRequestClient(_:)`, and task-scoped call options | First deadline-clock use seals the shared binding. |
 
 ## Architecture
 
@@ -28,6 +32,7 @@ ActorSystemCore continues to own invocation deadlines and cancellation.
 Actor deadline task -> CloudflareActorClock -> actor-isolated driver
     -> scheduler.wait(milliseconds, { signal }) -> Promise settlement
 Task cancellation -> driver -> AbortController.abort() -> Promise rejection
+generated Actor call -> CloudflareActorRequestClient -> JavaScript service bridge
 ```
 
 ## Contracts and Invariants
@@ -48,6 +53,13 @@ reservation serializes installation attempts; the flag uses the existing
 host-state Mutex. Cancellation and settlement follow the architecture flow
 above and the lifecycle contract below.
 
+Within a rendered request, an application may scope an ordinary generated
+Actor call with swift-actor-system's `ActorCallOptions` contract. The Embedded
+facade writes its timeout into the outbound frame and races the request using
+the installed Cloudflare clock. Cancellation or timeout aborts the pending
+JavaScript request and Core sends its cancellation frame after dispatch. The
+host does not select or store an application timeout.
+
 ## State, Ownership, and Lifecycle
 
 | State | Native storage/isolation | Standard WASM storage/isolation | Embedded WASM storage/isolation | Entry points and cleanup |
@@ -62,6 +74,9 @@ Actor-system shutdown cancels and joins its deadline tasks through the existing
 Core lifecycle; the clock does not introduce a second shutdown coordinator.
 Only the Embedded host installs this clock. Native compilation and duration
 tests do not claim execution of JavaScript timers outside a JavaScript host.
+The application runtime owns Actor Core shutdown. The validation harness owns
+workerd disposal and Native service-peer termination/join; no
+`CloudflareHost.shutdown` API is implied.
 
 ## Failure, Concurrency, and Constraints
 
@@ -80,3 +95,8 @@ exercise the production clock under pinned Embedded WASM: automatic firing,
 pre-cancellation, in-flight cancellation, no later timer firing, and Core
 shutdown racing a deadline. A new platform clock or binding change requires
 rechecking the SwiftWeb SPI contract and the actual host execution path.
+The package-level Embedded page-worker validation separately proves the
+generated request client, actual local Durable Object namespace/RPC, Native
+`WebActorSystem` service peer backed by `SwiftActorSystem`, failures, deadline,
+and terminal cleanup. A direct JavaScript request-handler substitution does not
+prove that boundary.

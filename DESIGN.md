@@ -24,6 +24,7 @@ source-control dependency with a local checkout during a generated build.
 
 ```text
 SwiftWeb App -> CloudflareHost -> Worker bridge
+generated Actor call -> __swiftWebActorRequest -> DurableObjectNamespace RPC
 ActorSystemCore -> ActorClock -> Cloudflare scheduler.wait
 ```
 
@@ -41,6 +42,24 @@ own local package path is composition of authored sources, not an external
 dependency override. Branch and local-edit overrides are not part of the
 consumable graph.
 
+The generated `page-worker` is an Embedded Actor client. Its replacement and
+the Native service-host registration are generated separately from one actor
+source authored against `WebActorSystem` and one schema lock. The Native
+`WebActorSystem` facade uses its `SwiftActorSystem` backend; the target-specific
+Swift actor types differ while their wire identities and fingerprints remain
+equal. A task-scoped
+`ActorCallOptions` value may supply the page call's deadline without mutating
+the shared system, while this adapter supplies the platform clock.
+
+The production service boundary is
+`DurableObjectNamespace.getByName(identity).invokeActorFrame`. Local workerd
+validation must cross that namespace/RPC boundary. Its fixture Durable Object
+may proxy owned frame bytes to a Native `WebActorSystem` service peer using the
+generated Native bootstrap and `SwiftWebRequestReplyActorTransport`; this is
+evidence of the local proxy and Swift dispatch path, not a deployed Durable
+Object, Durable Object persistence, or a Swift service compiled to Cloudflare
+WASM.
+
 ## Verification and Change Impact
 
 Host changes require the focused host tests and an actual local-workerd run
@@ -51,3 +70,10 @@ external dependencies are remote source-control checkouts at the expected
 immutable revisions. Native tests and compile/link
 alone do not prove JavaScript execution. Deployment and public release are
 separate operations.
+
+`Validation/EmbeddedPageWorker` owns the generated-page evidence: page
+response, generated Actor success, typed application and system failures,
+in-flight cancellation, a task-scoped deadline through the production clock,
+application-owned Actor Core shutdown, and harness-owned Worker/native-process
+cleanup. A JavaScript object substituted directly for the namespace is only a
+unit fixture and cannot satisfy this gate.

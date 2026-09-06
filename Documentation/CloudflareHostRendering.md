@@ -36,16 +36,13 @@ or application protocol that competes with SwiftWeb's renderer.
 ## Event boundary
 
 The generated launcher keeps the host alive as an immutable module owner and
-forwards six semantic WASM exports:
+forwards three semantic WASM exports:
 
 | Export | Host operation |
 |---|---|
 | `renderApplication` | `CloudflareHost.render(_:)` |
 | `respondToRequest` | `CloudflareHost.respondToRequest()` |
-| `invokeActor` | `CloudflareHost.invokeActor()` |
-| `openActorSocket` | `CloudflareHost.openActorSocket()` |
-| `receiveActorSocketMessage` | `CloudflareHost.receiveActorSocketMessage()` |
-| `closeActorSocket` | `CloudflareHost.closeActorSocket()` |
+| `invokeActorFrame` | `CloudflareHost.invokeActorFrame()` |
 
 Each WASM instance receives a runtime identifier. Rendering, page responses,
 actor results, and socket frames return that identifier across the bridge, so
@@ -63,9 +60,17 @@ pending operation.
   explicit HTTP error.
 - Cloudflare configuration and bindings remain in `wrangler.jsonc`; they are not
   exposed through SwiftWeb's `App`.
+- A page-worker app owns its Actor Core shutdown. The immutable host has no
+  separate shutdown API; the local validation harness owns Worker disposal and
+  Native service-process termination.
 
-The host library has two verified target capabilities: regular WASM with local
-actor hosting, and Embedded WASM with generated concrete references to actors
-hosted by selected Service applications. Platform selection does not change
-the Swift actor method surface or move logical identity into deployment
-configuration.
+The Embedded `page-worker` holds generated concrete references to actors hosted
+by selected Service applications; it does not host those actors locally. Its
+production bridge calls
+`DurableObjectNamespace.getByName(identity).invokeActorFrame`. Local workerd
+validation may place a proxy Durable Object behind that binding and forward to
+a Native `WebActorSystem` service peer backed by `SwiftActorSystem`, proving the
+namespace/RPC and Swift frame-dispatch boundaries without claiming deployment,
+persistence, or a Swift service compiled to Cloudflare WASM. Platform
+projection does not change wire identity or move logical actor identity into
+deployment configuration.

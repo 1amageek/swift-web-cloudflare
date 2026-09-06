@@ -18,7 +18,7 @@ if let swiftWebRoot = Context.environment["SWIFT_WEB_ROOT"] {
 } else {
     swiftWebDependency = .package(
         url: "https://github.com/1amageek/swift-web.git",
-        revision: "10ab5465af363907950c78c3e018c0713d87b8be",
+        revision: "78871b0dfe35169029ce7ba5cff7b632406d5a1c",
         traits: swiftWebTraits
     )
 }
