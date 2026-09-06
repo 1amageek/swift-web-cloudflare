@@ -25,6 +25,11 @@ let package = Package(
                 .product(name: "SwiftWebCloudflareHost", package: "swift-web-cloudflare"),
 {{actors.swiftProductDependencies}}
             ],
+            swiftSettings: [
+                .unsafeFlags([
+                    {{actors.swiftCompilerFlags}}
+                ]),
+            ],
             linkerSettings: [
                 .linkedLibrary("swiftUnicodeDataTables", .when(platforms: [.wasi])),
                 .unsafeFlags([

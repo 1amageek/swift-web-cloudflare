@@ -18,6 +18,8 @@ source-control dependency with a local checkout during a generated build.
 | Design | Relationship | Contract used | Cautions |
 |---|---|---|---|
 | [Host module](Sources/SwiftWebCloudflareHost/DESIGN.md) | child | Worker clock and host binding | Preserve cancellation and custom-clock ownership. |
+| [Embedded page-worker validation](Validation/EmbeddedPageWorker/DESIGN.md) | child | Generated host, local service proxy, and terminal proof | This local gate is not deployment evidence. |
+| [SwiftWeb adapter contract](https://github.com/1amageek/swift-web/blob/main/docs/AdapterContract.md) | depends on | Alias-aware Swift imports, Actor module references, and launcher-only compiler flags | Do not replace compiler aliases with SwiftPM module aliases or application renames. |
 | [SwiftWeb Actors](https://github.com/1amageek/swift-web/blob/main/Sources/SwiftWebRuntime/Actors/DESIGN.md) | depends on | Hosting SPI and Actor configuration | Consume the reviewed upstream implementation. |
 
 ## Architecture
@@ -42,14 +44,23 @@ own local package path is composition of authored sources, not an external
 dependency override. Branch and local-edit overrides are not part of the
 consumable graph.
 
+The worker launcher imports application and Actor modules through the
+materialized Swift references. When an imported module qualifier collides with
+a known application or service type, only the launcher target receives the
+deterministic `-module-alias` compiler setting; the original dependency module,
+manifest record, ABI name, and Actor/schema identities remain unchanged. The
+template does not apply SwiftPM `moduleAliases`, unqualify Actor types, or
+rename the authored application. Non-colliding rendered source keeps its
+existing semantics.
+
 The generated `page-worker` is an Embedded Actor client. Its replacement and
 the Native service-host registration are generated separately from one actor
 source authored against `WebActorSystem` and one schema lock. The Native
 `WebActorSystem` facade uses its `SwiftActorSystem` backend; the target-specific
 Swift actor types differ while their wire identities and fingerprints remain
-equal. A task-scoped
-`ActorCallOptions` value may supply the page call's deadline without mutating
-the shared system, while this adapter supplies the platform clock.
+equal. A task-scoped `ActorCallOptions` value may supply the page call's
+deadline without mutating the shared system, while this adapter supplies the
+platform clock.
 
 The production service boundary is
 `DurableObjectNamespace.getByName(identity).invokeActorFrame`. Local workerd

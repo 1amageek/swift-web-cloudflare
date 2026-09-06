@@ -24,6 +24,32 @@ final class CloudflarePageServerTests: XCTestCase {
         XCTAssertFalse(source.contains("SWIFT_WEB_ROOT"))
     }
 
+    func testWorkerLauncherUsesMaterializedModuleReferences() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let launcher = try String(
+            contentsOf: packageRoot
+                .appendingPathComponent(
+                    "Adapter/Templates/Host/worker/Sources/AppWorkerLauncher/Launcher.swift"
+                ),
+            encoding: .utf8
+        )
+        let package = try String(
+            contentsOf: packageRoot.appendingPathComponent(
+                "Adapter/Templates/Host/worker/Package.swift"
+            ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(launcher.contains("{{application.swiftImport}}"))
+        XCTAssertFalse(launcher.contains("import {{application.module}}"))
+        XCTAssertTrue(package.contains("{{actors.swiftCompilerFlags}}"))
+        XCTAssertTrue(package.contains(".unsafeFlags(["))
+        XCTAssertFalse(package.contains("moduleAliases"))
+    }
+
     func testServesRoutesFromRenderedApp() async throws {
         let renderedApp = try await AppRenderer.render(
             CloudflareFixtureApp(),

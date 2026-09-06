@@ -1,5 +1,5 @@
 import SwiftWebCloudflareHost
-import {{application.module}}
+{{application.swiftImport}}
 {{actors.swiftImports}}
 
 private enum WorkerRuntime {
