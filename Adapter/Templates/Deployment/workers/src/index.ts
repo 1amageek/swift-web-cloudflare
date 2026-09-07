@@ -3,6 +3,8 @@ import { swiftWebActorFrameLimits } from "./actor-frame-limits";
 import { pageApplicationRuntime } from "./application-runtime";
 import { installSwiftWebActorServices } from "./actor-services";
 import { SwiftWebActorObject } from "./actor-object";
+// @ts-ignore
+import pageRuntimeProgram from "./app.wasm";
 import {
   RequestBodyTooLargeError,
   errorResponse,
@@ -70,7 +72,7 @@ export default {
     }
 
     try {
-      const runtime = await pageApplicationRuntime();
+      const runtime = await pageApplicationRuntime(pageRuntimeProgram);
       return await runtime.respond(request);
     } catch (error) {
       if (error instanceof RequestBodyTooLargeError) {

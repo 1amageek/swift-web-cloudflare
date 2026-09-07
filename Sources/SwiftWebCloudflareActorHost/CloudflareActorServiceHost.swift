@@ -221,6 +221,45 @@ public final class CloudflareActorServiceHost: Sendable {
         }
     }
 
+    /// Captures the JavaScript terminal-call identity before awaiting Core shutdown.
+    /// The common deployment runtime owns callback settlement and registration release.
+    public func requestShutdown() {
+        let runtimeID = CloudflareActorBridge.currentRuntimeID ?? -1
+        let callID = CloudflareActorBridge.currentShutdownCallID ?? ""
+        guard runtimeID >= 0, !callID.isEmpty else {
+            CloudflareActorBridge.actorServiceShutdownFailed(
+                runtimeID: runtimeID,
+                callID: callID,
+                message: "The Cloudflare actor shutdown identity is unavailable"
+            )
+            return
+        }
+        guard ownsRuntimeIdentity(runtimeID) else {
+            CloudflareActorBridge.actorServiceShutdownFailed(
+                runtimeID: runtimeID,
+                callID: callID,
+                message: "The Cloudflare actor shutdown runtime identity does not match"
+            )
+            return
+        }
+
+        Task {
+            do {
+                try await shutdown()
+                CloudflareActorBridge.actorServiceShutdownCompleted(
+                    runtimeID: runtimeID,
+                    callID: callID
+                )
+            } catch {
+                CloudflareActorBridge.actorServiceShutdownFailed(
+                    runtimeID: runtimeID,
+                    callID: callID,
+                    message: errorText(error)
+                )
+            }
+        }
+    }
+
     /// Invokes the actor frame currently presented by the Durable Object bridge.
     public func invokeActorFrame() {
         let input: CloudflareActorFrameInput
@@ -280,6 +319,19 @@ public final class CloudflareActorServiceHost: Sendable {
                 return false
             }
             return readyRuntimeID == runtimeID
+        }
+    }
+
+    private func ownsRuntimeIdentity(_ runtimeID: Int) -> Bool {
+        state.withLock { state in
+            switch state.phase {
+            case .starting(let currentRuntimeID, _),
+                 .ready(let currentRuntimeID),
+                 .failed(let currentRuntimeID):
+                return currentRuntimeID == runtimeID
+            case .idle, .stopped:
+                return false
+            }
         }
     }
 

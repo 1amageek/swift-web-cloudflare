@@ -142,16 +142,9 @@ func invokeActorHost() {
     ActorBoundaryValidation.host.invokeActorFrame()
 }
 
-@_expose(wasm, "shutdown_actor_host")
-@_cdecl("shutdown_actor_host")
-func shutdownActorHost() {
-    Task {
-        do {
-            try await ActorBoundaryValidation.host.shutdown()
-            _ = JSObject.global.actorBoundaryStopped?("stopped")
-        } catch {
-            _ = JSObject.global.actorBoundaryStopped?("failed:\(error)")
-        }
-    }
+@_expose(wasm, "shutdownActorService")
+@_cdecl("shutdownActorService")
+func requestActorServiceShutdown() {
+    ActorBoundaryValidation.host.requestShutdown()
 }
 #endif

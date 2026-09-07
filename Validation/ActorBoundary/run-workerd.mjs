@@ -70,6 +70,10 @@ try {
     assert.equal(response.status, 200);
     assert.equal(report.early, "failed", "Bootstrap must finish before admission");
     assert.equal(report.stopped, "failed", "Shutdown must stop admission");
+    assert.equal(report.wrongShutdownRuntime, "failed", "Another runtime must not stop this host");
+    assert.equal(report.shutdown, "stopped", "The production terminal bridge must join Core shutdown");
+    assert.equal(report.repeatedShutdown, "failed", "A stopped bridge must reject another terminal request");
+    assert.equal(report.events.filter(event => event[0] === "shutdown" && event[3] === "stopped").length, 1);
     assert.deepEqual(report.events.find(event => event[0] === "bootstrap"), ["bootstrap", 42, 19]);
     assert.equal(report.events.filter(event => event[0] === "ready" || event[0] === "startup-failed").length, 1);
     if (mode === "host") {

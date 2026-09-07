@@ -5,6 +5,8 @@ import {
   errorResponse,
   logError,
 } from "./http";
+// @ts-ignore
+import pageRuntimeProgram from "./app.wasm";
 
 export default {
   async fetch(request: Request, environment: Env): Promise<Response> {
@@ -16,7 +18,7 @@ export default {
       });
     }
     try {
-      return await (await pageApplicationRuntime()).respond(request);
+      return await (await pageApplicationRuntime(pageRuntimeProgram)).respond(request);
     } catch (error) {
       if (error instanceof RequestBodyTooLargeError) {
         return errorResponse("Request body is too large", 413);

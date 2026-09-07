@@ -20,6 +20,7 @@ checkout during a generated build.
 |---|---|---|---|
 | [Host module](Sources/SwiftWebCloudflareHost/DESIGN.md) | child | Worker clock and host binding | Preserve cancellation and custom-clock ownership. |
 | [Actor host module](Sources/SwiftWebCloudflareActorHost/DESIGN.md) | child | Actor request categories, bootstrap admission, and shutdown | Keep application registration and policy outside the generic host. |
+| [Deployment common runtime](Adapter/Templates/Deployment/common/DESIGN.md) | child | Isolate-wide runtime registry, callback ownership, and terminal release | Composition supplies the WASM module; the common runtime does not import an application artifact. |
 | [Embedded page-worker validation](Validation/EmbeddedPageWorker/DESIGN.md) | child | Generated host, local service proxy, and terminal proof | This local gate is not deployment evidence. |
 | [SwiftWeb adapter contract](https://github.com/1amageek/swift-web/blob/main/docs/AdapterContract.md) | depends on | Alias-aware Swift imports, Actor module references, and launcher-only compiler flags | Do not replace compiler aliases with SwiftPM module aliases or application renames. |
 | [SwiftWeb Actors](https://github.com/1amageek/swift-web/blob/main/Sources/SwiftWebRuntime/Actors/DESIGN.md) | depends on | Hosting SPI and Actor configuration | Consume the reviewed upstream implementation. |
@@ -27,10 +28,11 @@ checkout during a generated build.
 ## Architecture
 
 ```text
-SwiftWeb App -> CloudflareHost -> Worker bridge
+SwiftWeb App -> CloudflareHost -> common runtime registry -> Worker bridge
 generated Actor call -> request client -> __swiftWebActorRequest -> DurableObjectNamespace RPC
 ActorSystemCore <- generic failure category / owned frame -> request client
 actor service host -> bootstrap context -> configure -> register -> admit -> invoke
+explicit service stop -> common registry -> thin launcher -> ActorSystem shutdown
 ActorSystemCore -> ActorClock -> Cloudflare scheduler.wait
 ```
 
@@ -96,6 +98,20 @@ is not compiled for the Embedded page/client target. Shutdown transitions to a
 terminal state and no later start or invocation is admitted where the host is
 compiled.
 
+The deployment-common runtime owns the isolate-wide `ApplicationRuntimeRegistry`.
+Each composition registers a runtime with a unique runtime ID and an optional
+storage token; callback dispatch first resolves that owner and rejects unknown,
+mismatched, or released IDs. Page retirement remains a generation-local
+operation and has no shutdown export. Actor service stop is a separate terminal
+handshake: the common registry reserves a unique shutdown call ID, the thin
+application launcher delegates to `CloudflareActorServiceHost.requestShutdown()`,
+which awaits the existing `shutdown()` operation. The bridge captures
+runtime/call IDs before awaiting Core shutdown. Exactly one success or failure
+callback is delivered to the owning runtime. The registry releases runtime and
+storage routes after that callback; the application composition then releases
+its own database execution callback. Failure rejects remaining pending calls
+before release.
+
 ## Verification and Change Impact
 
 Request/host changes require the focused Swift tests, strict common-template
@@ -103,7 +119,9 @@ checks, and one actual local-workerd adapter run with the pinned WASM artifact.
 The run must exercise success, rejection categories, cancellation, bounded
 frames, bootstrap admission, identity rejection, exactly-once completion, and
 explicit shutdown. Generated-build changes additionally require a template
-assertion that no implicit `SWIFT_WEB_ROOT` is exported. The subsequent
+assertion that no implicit `SWIFT_WEB_ROOT` is exported and a materialized-file
+identity check proving that Page and service compositions use the common runtime
+owner without duplicate registries. The subsequent
 generated-host integration gate requires a fresh materialized graph whose
 external dependencies are remote source-control checkouts at the expected
 immutable revisions. Native tests and compile/link

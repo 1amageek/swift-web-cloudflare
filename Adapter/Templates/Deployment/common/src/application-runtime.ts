@@ -1,17 +1,23 @@
 import { WASI, File, OpenFile, ConsoleStdout } from "@bjorn3/browser_wasi_shim";
 import { SwiftRuntime } from "./runtime.mjs";
-import wasmModule from "./app.wasm";
 import {
   type ActorFrameInvocationBridge,
   type ActorFrameInvocationContext,
   writeActorFrameInvocationContext,
-} from "./actor-frame-invocation";
-import { readBoundedBytes } from "./http";
+} from "./actor-frame-invocation.ts";
+import { readBoundedBytes } from "./http.ts";
+import { swiftWebActorFrameLimits } from "./actor-frame-limits.ts";
+import {
+  PageRuntimeCoordinator,
+  type PageRuntimeCoordinatorOptions,
+} from "./PageRuntimeCoordinator.ts";
+import type { PageRequestEnvelope } from "./PageWire.ts";
 
-export type { ActorFrameInvocationContext } from "./actor-frame-invocation";
+export type { ActorFrameInvocationContext } from "./actor-frame-invocation.ts";
 
 const HEADER_SEPARATOR = "\u001f";
 const PAGE_BODY_LIMIT = 16 * 1024 * 1024;
+const maximumRuntimeID = 0x7fff_ffff;
 
 interface Pending<Value> {
   resolve(value: Value): void;
@@ -24,374 +30,488 @@ interface PageResult {
   bodyBase64: string;
 }
 
-interface BridgeGlobals extends ActorFrameInvocationBridge {
-  __swiftWebRuntimeID?: number;
-  __swiftWebRenderingID?: number;
-  __swiftWebStorageToken?: number;
-  __swiftWebStorageActorID?: string;
-  __swiftWebStorageBlob?: string;
-  __swiftWebStorageResult?: string;
-  __swiftWebActorFrameCallID?: string;
-  __swiftWebActorFrameBase64?: string;
-  __swiftWebRequestCallID?: string;
-  __swiftWebRequestMethod?: string;
-  __swiftWebRequestPath?: string;
-  __swiftWebRequestSearch?: string;
-  __swiftWebRequestScheme?: string;
-  __swiftWebRequestHost?: string;
-  __swiftWebRequestHeaders?: string;
-  __swiftWebRequestBodyBase64?: string;
-  swiftWebDidRender(runtimeID: number, renderingID: number): void;
-  swiftWebRenderingFailed(runtimeID: number, renderingID: number, message: string): void;
-  swiftWebDidRespond(
-    runtimeID: number,
-    callID: string,
-    status: number,
-    headersWire: string,
-    bodyBase64: string
-  ): void;
-  swiftWebResponseFailed(runtimeID: number, callID: string, message: string): void;
-  swiftWebDidInvokeActorFrame(
-    runtimeID: number,
-    callID: string,
-    responseBase64: string
-  ): void;
-  swiftWebActorFrameInvocationFailed(
-    runtimeID: number,
-    callID: string,
-    message: string
-  ): void;
-  swiftWebLoadActorState(): void;
-  swiftWebSaveActorState(): void;
+interface RuntimeCallbacks {
+  rendered?(renderingID: number): void;
+  renderingFailed?(renderingID: number, message: string): void;
+  responded?(callID: string, status: number, headers: string, body: string): void;
+  responseFailed?(callID: string, message: string): void;
+  actorFrameCompleted?(callID: string, response: string): void;
+  actorFrameFailed?(callID: string, message: string): void;
+  shutdownCompleted?(callID: string): void;
+  shutdownFailed?(callID: string, message: string): void;
 }
 
-const bridge = globalThis as typeof globalThis & BridgeGlobals;
+interface RuntimeRegistration {
+  readonly id: number;
+  readonly callbacks: RuntimeCallbacks;
+  readonly storage: DurableObjectStorage | undefined;
+}
+
+/** Routing is weak; a DO composition or Page generation owns the registration. */
+export class ApplicationRuntimeRegistry {
+  private nextID = 1;
+  private readonly registrations = new Map<number, WeakRef<RuntimeRegistration>>();
+  private readonly finalized = new FinalizationRegistry<number>((id) => {
+    this.registrations.delete(id);
+  });
+
+  register(callbacks: RuntimeCallbacks, storage?: DurableObjectStorage): RuntimeRegistration {
+    if (this.nextID > maximumRuntimeID) {
+      throw new RangeError("Application runtime identity space is exhausted");
+    }
+    const registration = { id: this.nextID++, callbacks, storage };
+    this.registrations.set(registration.id, new WeakRef(registration));
+    this.finalized.register(registration, registration.id, registration);
+    return registration;
+  }
+
+  runtime(id: number): RuntimeRegistration | undefined {
+    return this.registrations.get(id)?.deref();
+  }
+
+  durableStorage(token: number): DurableObjectStorage | undefined {
+    return this.runtime(token)?.storage;
+  }
+
+  release(registration: RuntimeRegistration): void {
+    if (this.runtime(registration.id) !== registration) {
+      throw new Error("Application runtime is already released");
+    }
+    this.registrations.delete(registration.id);
+    this.finalized.unregister(registration);
+  }
+
+  dispatch<Key extends keyof RuntimeCallbacks>(
+    id: number, name: Key, ...arguments_: Parameters<NonNullable<RuntimeCallbacks[Key]>>
+  ): void {
+    const registration = this.runtime(id);
+    const callback = registration?.callbacks[name];
+    if (callback === undefined) {
+      throw new Error("Unknown application runtime callback " + id + "/" + name);
+    }
+    // Key and arguments are correlated at every caller; callbacks capture their owner.
+    (callback as (...values: Parameters<NonNullable<RuntimeCallbacks[Key]>>) => void)(...arguments_);
+  }
+}
+
+// Generated Page and Service modules can coexist in one verification realm.
+const registryKey = Symbol.for("swiftweb.application-runtime.registry");
+const runtimeScope = globalThis as typeof globalThis & {
+  [registryKey]?: ApplicationRuntimeRegistry;
+};
+const registry = runtimeScope[registryKey] ??= new ApplicationRuntimeRegistry();
+const bridge = globalThis as typeof globalThis & ActorFrameInvocationBridge & Record<string, unknown>;
+
+function dispatch<Key extends keyof RuntimeCallbacks>(
+  runtimeID: number, name: Key, ...arguments_: Parameters<NonNullable<RuntimeCallbacks[Key]>>
+): void {
+  try {
+    registry.dispatch(runtimeID, name, ...arguments_);
+  } catch (error) {
+    console.error("Application runtime callback rejected", error);
+  }
+}
+
+// Every module copy dispatches through the same isolate-wide, non-owning index.
+bridge.swiftWebDidRender = (id: number, rendering: number) => dispatch(id, "rendered", rendering);
+bridge.swiftWebRenderingFailed = (id: number, rendering: number, message: string) =>
+  dispatch(id, "renderingFailed", rendering, message);
+bridge.swiftWebDidRespond = (id: number, call: string, status: number, headers: string, body: string) =>
+  dispatch(id, "responded", call, status, headers, body);
+bridge.swiftWebResponseFailed = (id: number, call: string, message: string) =>
+  dispatch(id, "responseFailed", call, message);
+bridge.swiftWebDidInvokeActorFrame = (id: number, call: string, response: string) =>
+  dispatch(id, "actorFrameCompleted", call, response);
+bridge.swiftWebActorFrameInvocationFailed = (id: number, call: string, message: string) =>
+  dispatch(id, "actorFrameFailed", call, message);
+bridge.swiftWebActorServiceShutdownCompleted = (id: number, call: string) =>
+  dispatch(id, "shutdownCompleted", call);
+bridge.swiftWebActorServiceShutdownFailed = (id: number, call: string, message: string) =>
+  dispatch(id, "shutdownFailed", call, message);
 
 export class ApplicationRuntime {
-  private nextRenderingID = 1;
-  private nextRequestID = 1;
-  private nextActorFrameID = 1;
+  private readonly registration: RuntimeRegistration;
+  private nextCall = 1;
+  private startupRequested = false;
   private readonly rendering = new Map<number, Pending<void>>();
   private readonly requests = new Map<string, Pending<PageResult>>();
   private readonly actorFrames = new Map<string, Pending<Uint8Array | null>>();
+  private terminalCall: { id: string; pending: Pending<void> } | undefined;
+  private shutdownOperation?: Promise<void>;
+  private state: "active" | "stopping" | "terminal" = "active";
 
-  constructor(
-    readonly id: number,
-    private readonly instance: WebAssembly.Instance,
-    private readonly storageToken?: number
-  ) {}
+  constructor(private readonly instance: WebAssembly.Instance, storage?: DurableObjectStorage) {
+    this.registration = registry.register({
+      rendered: (id) => take(this.rendering, id).resolve(),
+      renderingFailed: (id, message) => take(this.rendering, id).reject(new Error(message)),
+      responded: (id, status, headersWire, bodyBase64) =>
+        take(this.requests, id).resolve({ status, headersWire, bodyBase64 }),
+      responseFailed: (id, message) => take(this.requests, id).reject(new Error(message)),
+      actorFrameCompleted: (id, response) => {
+        const pending = take(this.actorFrames, id);
+        try {
+          const bytes = base64ToBytes(response, swiftWebActorFrameLimits.maximumFrameByteCount);
+          pending.resolve(bytes.byteLength > 0 ? bytes : null);
+        } catch (error) {
+          pending.reject(asError(error));
+        }
+      },
+      actorFrameFailed: (id, message) => take(this.actorFrames, id).reject(new Error(message)),
+      shutdownCompleted: (id) => this.finishShutdown(id),
+      shutdownFailed: (id, message) => this.finishShutdown(id, new Error(message)),
+    }, storage);
+  }
+
+  get id(): number { return this.registration.id; }
+  get storageToken(): number | undefined { return this.registration.storage ? this.id : undefined; }
 
   render(): Promise<void> {
-    const renderingID = this.nextRenderingID++;
+    this.requireAdmission();
+    if (this.startupRequested) throw new Error("Application startup has already been requested");
+    this.startupRequested = true;
+    const renderingID = this.id;
     return new Promise<void>((resolve, reject) => {
       this.rendering.set(renderingID, { resolve, reject });
       this.prepareBridge();
       bridge.__swiftWebRenderingID = renderingID;
       try {
-        this.callExport("renderApplication");
+        perform(this.instance, "renderApplication");
       } catch (error) {
-        this.rendering.delete(renderingID);
-        reject(asError(error));
+        take(this.rendering, renderingID).reject(asError(error));
       }
     });
   }
 
   async respond(request: Request): Promise<Response> {
+    this.requireAdmission();
     const url = new URL(request.url);
     const headerParts: string[] = [];
-    request.headers.forEach((value, name) => {
-      headerParts.push(name, value);
-    });
-
+    request.headers.forEach((value, name) => headerParts.push(name, value));
     let bodyBase64 = "";
     if (request.method !== "GET" && request.method !== "HEAD" && request.body) {
       bodyBase64 = bytesToBase64(await readBoundedBytes(request, PAGE_BODY_LIMIT));
     }
-
-    const callID = `request-${this.nextRequestID++}`;
+    this.requireAdmission();
+    const callID = this.reserveCallID();
     const page = await new Promise<PageResult>((resolve, reject) => {
       this.requests.set(callID, { resolve, reject });
       this.prepareBridge();
-      bridge.__swiftWebRequestCallID = callID;
-      bridge.__swiftWebRequestMethod = request.method;
-      bridge.__swiftWebRequestPath = url.pathname;
-      bridge.__swiftWebRequestSearch = url.search.startsWith("?")
-        ? url.search.slice(1)
-        : url.search;
-      bridge.__swiftWebRequestScheme = url.protocol.replace(":", "");
-      bridge.__swiftWebRequestHost = url.host;
-      bridge.__swiftWebRequestHeaders = headerParts.join(HEADER_SEPARATOR);
-      bridge.__swiftWebRequestBodyBase64 = bodyBase64;
+      writePageRequest(callID, {
+        method: request.method, path: url.pathname,
+        search: url.search.startsWith("?") ? url.search.slice(1) : url.search,
+        scheme: url.protocol.replace(":", ""), host: url.host,
+        encodedHeaders: headerParts.join(HEADER_SEPARATOR), encodedBody: bodyBase64,
+      });
       try {
-        this.callExport("respondToRequest");
+        perform(this.instance, "respondToRequest");
       } catch (error) {
-        this.requests.delete(callID);
-        reject(asError(error));
+        take(this.requests, callID).reject(asError(error));
       }
     });
-
     const headers: [string, string][] = [];
-    if (page.headersWire.length > 0) {
-      const parts = page.headersWire.split(HEADER_SEPARATOR);
-      for (let index = 0; index + 1 < parts.length; index += 2) {
-        const name = parts[index];
-        const value = parts[index + 1];
-        if (name === undefined || value === undefined) {
-          break;
-        }
-        headers.push([name, value]);
-      }
+    const parts = page.headersWire.length > 0 ? page.headersWire.split(HEADER_SEPARATOR) : [];
+    for (let index = 0; index + 1 < parts.length; index += 2) {
+      headers.push([parts[index]!, parts[index + 1]!]);
     }
     const body = base64ToBytes(page.bodyBase64);
-    return new Response(body.byteLength > 0 ? body : null, {
-      status: page.status,
-      headers,
-    });
+    return new Response(body.byteLength > 0 ? body : null, { status: page.status, headers });
   }
 
-  invokeActorFrame(
-    frame: Uint8Array,
-    context: ActorFrameInvocationContext
-  ): Promise<Uint8Array | null> {
-    if (!(frame instanceof Uint8Array)) {
-      throw new TypeError("Actor frame must be Uint8Array");
+  invokeActorFrame(frame: Uint8Array, context: ActorFrameInvocationContext): Promise<Uint8Array | null> {
+    this.requireAdmission();
+    if (!(frame instanceof Uint8Array)) throw new TypeError("Actor frame must be Uint8Array");
+    if (frame.byteLength > swiftWebActorFrameLimits.maximumFrameByteCount) {
+      throw new RangeError("Actor frame exceeds the Cloudflare transport limit");
     }
-    const callID = `actor-frame-${this.nextActorFrameID++}`;
-    return new Promise<Uint8Array | null>((resolve, reject) => {
+    // Validate and encode before reserving a pending call.
+    const encoded = bytesToBase64(frame);
+    writeActorFrameInvocationContext(bridge, context);
+    const callID = this.reserveCallID();
+    return new Promise((resolve, reject) => {
       this.actorFrames.set(callID, { resolve, reject });
       this.prepareBridge();
       bridge.__swiftWebActorFrameCallID = callID;
-      bridge.__swiftWebActorFrameBase64 = bytesToBase64(frame);
-      writeActorFrameInvocationContext(bridge, context);
+      bridge.__swiftWebActorFrameBase64 = encoded;
       try {
-        this.callExport("invokeActorFrame");
+        perform(this.instance, "invokeActorFrame");
       } catch (error) {
-        this.actorFrames.delete(callID);
-        reject(asError(error));
+        take(this.actorFrames, callID).reject(asError(error));
       }
     });
   }
 
-  renderingCompleted(renderingID: number): void {
-    this.rendering.get(renderingID)?.resolve();
-    this.rendering.delete(renderingID);
+  shutdown(): Promise<void> {
+    if (this.shutdownOperation) return this.shutdownOperation;
+    this.requireAdmission();
+    this.state = "stopping";
+    // A runtime stops once; termination must not depend on unused invocation IDs.
+    const id = "runtime-" + this.id + "-shutdown";
+    this.shutdownOperation = new Promise<void>((resolve, reject) => {
+      this.terminalCall = { id, pending: { resolve, reject } };
+    });
+    this.prepareBridge();
+    bridge.__swiftWebShutdownCallID = id;
+    try {
+      perform(this.instance, "shutdownActorService");
+    } catch (error) {
+      // A trapped/missing export is terminal failure, never successful Core shutdown.
+      this.finishShutdown(id, asError(error));
+    }
+    return this.shutdownOperation;
   }
 
-  renderingFailed(renderingID: number, message: string): void {
-    this.rendering.get(renderingID)?.reject(new Error(message));
-    this.rendering.delete(renderingID);
+  private finishShutdown(id: string, failure?: Error): void {
+    const call = this.terminalCall;
+    if (this.state !== "stopping" || call?.id !== id) {
+      throw new Error("Unknown actor service terminal call " + id);
+    }
+    this.terminalCall = undefined;
+    this.state = "terminal";
+    const closed = failure ?? new Error("Swift/WASM actor service stopped");
+    rejectAll(this.rendering, closed);
+    rejectAll(this.requests, closed);
+    rejectAll(this.actorFrames, closed);
+    registry.release(this.registration);
+    if (failure) call.pending.reject(failure);
+    else call.pending.resolve();
   }
 
-  responseCompleted(callID: string, page: PageResult): void {
-    this.requests.get(callID)?.resolve(page);
-    this.requests.delete(callID);
+  private requireAdmission(): void {
+    if (this.state !== "active") throw new Error("Application runtime is stopping or terminal");
   }
 
-  responseFailed(callID: string, message: string): void {
-    this.requests.get(callID)?.reject(new Error(message));
-    this.requests.delete(callID);
-  }
-
-  actorFrameInvocationCompleted(callID: string, responseBase64: string): void {
-    this.actorFrames.get(callID)?.resolve(
-      responseBase64.length > 0 ? base64ToBytes(responseBase64) : null
-    );
-    this.actorFrames.delete(callID);
-  }
-
-  actorFrameInvocationFailed(callID: string, message: string): void {
-    this.actorFrames.get(callID)?.reject(new Error(message));
-    this.actorFrames.delete(callID);
+  private reserveCallID(): string {
+    if (this.nextCall > Number.MAX_SAFE_INTEGER) throw new RangeError("Application call identity space is exhausted");
+    return "runtime-" + this.id + "-call-" + this.nextCall++;
   }
 
   private prepareBridge(): void {
     bridge.__swiftWebRuntimeID = this.id;
     bridge.__swiftWebStorageToken = this.storageToken ?? 0;
   }
+}
 
-  private callExport(name: string): void {
-    const exported = this.instance.exports[name];
-    if (typeof exported !== "function") {
-      throw new Error(`Swift/WASM export '${name}' is missing`);
+/** Bounded Page lifecycle; this owner is retained by its coordinator generation. */
+class PageApplicationRuntime {
+  private readonly registration: RuntimeRegistration;
+  private startID?: number;
+  private released = false;
+
+  constructor(
+    private readonly instance: WebAssembly.Instance,
+    private readonly coordinator: PageRuntimeCoordinator<PageApplicationRuntime, undefined>,
+  ) {
+    this.registration = registry.register({
+      rendered: (id) => this.coordinator.didStart(this.requireStartID(id)),
+      renderingFailed: (id, message) => this.coordinator.didFailToStart(this.requireStartID(id), message),
+      responded: (id, status, headers, body) =>
+        this.coordinator.didRenderPage(this.localCallID(id), status, headers, body),
+      responseFailed: (id, message) =>
+        this.coordinator.didFailToRenderPage(this.localCallID(id), message),
+    });
+  }
+
+  start(startID: number): void {
+    this.startID = startID;
+    this.prepareBridge();
+    bridge.__swiftWebRenderingID = this.registration.id;
+    perform(this.instance, "renderApplication");
+  }
+
+  render(callID: string, request: PageRequestEnvelope): void {
+    this.prepareBridge();
+    writePageRequest(this.registration.id + ":" + callID, request);
+    perform(this.instance, "respondToRequest");
+  }
+
+  get memoryByteCount(): number { return wasmMemory(this.instance).buffer.byteLength; }
+
+  release(): void {
+    if (this.released) throw new Error("Page runtime is already released");
+    this.released = true;
+    registry.release(this.registration);
+  }
+
+  private prepareBridge(): void {
+    if (this.released) throw new Error("Page runtime is released");
+    bridge.__swiftWebRuntimeID = this.registration.id;
+    bridge.__swiftWebStorageToken = 0;
+  }
+
+  private requireStartID(id: number): number {
+    if (id !== this.registration.id || this.startID === undefined) {
+      throw new Error("Page startup callback belongs to another runtime");
     }
-    exported();
+    return this.startID;
+  }
+
+  private localCallID(id: string): string {
+    const prefix = this.registration.id + ":";
+    if (typeof id !== "string" || !id.startsWith(prefix)) {
+      throw new Error("Page response callback belongs to another runtime");
+    }
+    return id.slice(prefix.length);
   }
 }
 
-class ApplicationRuntimeRegistry {
-  private nextRuntimeID = 1;
-  private nextStorageToken = 1;
-  private readonly runtimes = new Map<number, ApplicationRuntime>();
-  private readonly storage = new Map<number, DurableObjectStorage>();
-
-  register(instance: WebAssembly.Instance, durableStorage?: DurableObjectStorage): ApplicationRuntime {
-    const runtimeID = this.nextRuntimeID++;
-    let storageToken: number | undefined;
-    if (durableStorage) {
-      storageToken = this.nextStorageToken++;
-      this.storage.set(storageToken, durableStorage);
-    }
-    const runtime = new ApplicationRuntime(runtimeID, instance, storageToken);
-    this.runtimes.set(runtimeID, runtime);
-    return runtime;
-  }
-
-  runtime(runtimeID: number): ApplicationRuntime | undefined {
-    return this.runtimes.get(runtimeID);
-  }
-
-  durableStorage(storageToken: number): DurableObjectStorage | undefined {
-    return this.storage.get(storageToken);
-  }
+export function createPageRuntimeCoordinator(
+  module: WebAssembly.Module,
+  options: PageRuntimeCoordinatorOptions = {},
+): PageRuntimeCoordinator<PageApplicationRuntime, undefined> {
+  const coordinator: PageRuntimeCoordinator<PageApplicationRuntime, undefined> = new PageRuntimeCoordinator({
+    instantiate: async () => new PageApplicationRuntime(await instantiateApplication(module), coordinator),
+    start: (runtime, id) => runtime.start(id),
+    render: (runtime, id, request) => runtime.render(id, request),
+    memoryByteCount: (runtime) => runtime.memoryByteCount,
+    release: (runtime) => runtime.release(),
+  }, options);
+  return coordinator;
 }
 
-const registry = new ApplicationRuntimeRegistry();
-
-bridge.swiftWebDidRender = (runtimeID, renderingID) => {
-  registry.runtime(runtimeID)?.renderingCompleted(renderingID);
-};
-bridge.swiftWebRenderingFailed = (runtimeID, renderingID, message) => {
-  registry.runtime(runtimeID)?.renderingFailed(renderingID, message);
-};
-bridge.swiftWebDidRespond = (runtimeID, callID, status, headersWire, bodyBase64) => {
-  registry.runtime(runtimeID)?.responseCompleted(callID, {
-    status,
-    headersWire,
-    bodyBase64,
-  });
-};
-bridge.swiftWebResponseFailed = (runtimeID, callID, message) => {
-  registry.runtime(runtimeID)?.responseFailed(callID, message);
-};
-bridge.swiftWebDidInvokeActorFrame = (runtimeID, callID, responseBase64) => {
-  registry.runtime(runtimeID)?.actorFrameInvocationCompleted(callID, responseBase64);
-};
-bridge.swiftWebActorFrameInvocationFailed = (runtimeID, callID, message) => {
-  registry.runtime(runtimeID)?.actorFrameInvocationFailed(callID, message);
-};
 bridge.swiftWebLoadActorState = () => {
-  const storageToken = bridge.__swiftWebStorageToken;
+  const token = bridge.__swiftWebStorageToken;
   const actorID = bridge.__swiftWebStorageActorID;
-  const storage = storageToken ? registry.durableStorage(storageToken) : undefined;
-  if (!storage || !actorID) {
+  const storage = typeof token === "number" ? registry.durableStorage(token) : undefined;
+  if (!storage || typeof actorID !== "string" || actorID.length === 0) {
     throw new Error("Actor storage bridge is missing its storage token or actor ID");
   }
-  const rows = storage.sql
-    .exec("SELECT blob FROM swiftweb_actor_state WHERE id = ?", actorID)
-    .toArray();
-  const blob = rows[0]?.blob;
-  bridge.__swiftWebStorageResult = typeof blob === "string" ? blob : "";
+  const rows = storage.sql.exec("SELECT blob FROM swiftweb_actor_state WHERE id = ?", actorID).toArray();
+  bridge.__swiftWebStorageResult = typeof rows[0]?.blob === "string" ? rows[0].blob : "";
 };
 bridge.swiftWebSaveActorState = () => {
-  const storageToken = bridge.__swiftWebStorageToken;
+  const token = bridge.__swiftWebStorageToken;
   const actorID = bridge.__swiftWebStorageActorID;
   const blob = bridge.__swiftWebStorageBlob;
-  const storage = storageToken ? registry.durableStorage(storageToken) : undefined;
-  if (!storage || !actorID || blob === undefined) {
+  const storage = typeof token === "number" ? registry.durableStorage(token) : undefined;
+  if (!storage || typeof actorID !== "string" || actorID.length === 0 || typeof blob !== "string") {
     throw new Error("Actor storage bridge is missing its storage token, actor ID, or value");
   }
-  storage.sql.exec(
-    "INSERT OR REPLACE INTO swiftweb_actor_state (id, blob) VALUES (?, ?)",
-    actorID,
-    blob
-  );
+  storage.sql.exec("INSERT OR REPLACE INTO swiftweb_actor_state (id, blob) VALUES (?, ?)", actorID, blob);
 };
 
 class PageRuntimeProvider {
-  private ready?: Promise<ApplicationRuntime>;
+  private ready: Promise<ApplicationRuntime> | undefined;
 
-  application(): Promise<ApplicationRuntime> {
+  application(module: WebAssembly.Module): Promise<ApplicationRuntime> {
     if (!this.ready) {
-      this.ready = createApplicationRuntime()
-        .then(async (runtime) => {
-          await runtime.render();
-          return runtime;
-        })
-        .catch((error) => {
-          this.ready = undefined;
-          throw error;
-        });
+      this.ready = createApplicationRuntime(module).then(async (runtime) => {
+        await runtime.render();
+        return runtime;
+      }).catch((error) => {
+        this.ready = undefined;
+        throw error;
+      });
     }
     return this.ready;
   }
 }
 
 const pageRuntimeProvider = new PageRuntimeProvider();
-
-export function pageApplicationRuntime(): Promise<ApplicationRuntime> {
-  return pageRuntimeProvider.application();
+export function pageApplicationRuntime(module: WebAssembly.Module): Promise<ApplicationRuntime> {
+  return pageRuntimeProvider.application(module);
 }
 
 export async function createApplicationRuntime(
-  durableStorage?: DurableObjectStorage
+  module: WebAssembly.Module, storage?: DurableObjectStorage,
 ): Promise<ApplicationRuntime> {
-  const descriptors = [
+  return new ApplicationRuntime(await instantiateApplication(module), storage);
+}
+
+async function instantiateApplication(module: WebAssembly.Module): Promise<WebAssembly.Instance> {
+  const wasi = new WASI([], [], [
     new OpenFile(new File([])),
-    ConsoleStdout.lineBuffered((message: string) =>
-      console.log(JSON.stringify({ source: "swift-wasm", message }))
-    ),
-    ConsoleStdout.lineBuffered((message: string) =>
-      console.error(JSON.stringify({ source: "swift-wasm", message }))
-    ),
-  ];
-  const wasi = new WASI([], [], descriptors);
+    ConsoleStdout.lineBuffered((message: string) => console.log(JSON.stringify({ source: "swift-wasm", message }))),
+    ConsoleStdout.lineBuffered((message: string) => console.error(JSON.stringify({ source: "swift-wasm", message }))),
+  ]);
   const swift = new SwiftRuntime();
-  const bridgeImports: WebAssembly.ModuleImports = {};
-  for (const imported of WebAssembly.Module.imports(wasmModule)) {
+  const imports: WebAssembly.ModuleImports = {};
+  for (const imported of WebAssembly.Module.imports(module)) {
     if (imported.module === "bjs") {
-      bridgeImports[imported.name] = () => {
-        throw new Error(`Unexpected BridgeJS call '${imported.name}'`);
-      };
+      imports[imported.name] = () => { throw new Error("Unexpected BridgeJS call " + imported.name); };
     }
   }
-  const instance = await WebAssembly.instantiate(wasmModule, {
-    wasi_snapshot_preview1: wasi.wasiImport,
-    javascript_kit: swift.wasmImports,
-    bjs: bridgeImports,
+  const instance = await WebAssembly.instantiate(module, {
+    wasi_snapshot_preview1: wasi.wasiImport, javascript_kit: swift.wasmImports, bjs: imports,
   });
   swift.setInstance(instance);
-  wasi.initialize(wasiInstance(instance));
-  return registry.register(instance, durableStorage);
+  const initialize = instance.exports._initialize;
+  wasi.initialize({
+    exports: {
+      memory: wasmMemory(instance),
+      ...(typeof initialize === "function" ? { _initialize: () => initialize() } : {}),
+    },
+  });
+  return instance;
+}
+
+function wasmMemory(instance: WebAssembly.Instance): WebAssembly.Memory {
+  const memory = instance.exports.memory;
+  if (!(memory instanceof WebAssembly.Memory)) throw new Error("Swift/WASM instance does not export memory");
+  return memory;
+}
+
+function perform(instance: WebAssembly.Instance, name: string): void {
+  const exported = instance.exports[name];
+  if (typeof exported !== "function") throw new Error("Swift/WASM export '" + name + "' is missing");
+  exported();
+}
+
+function writePageRequest(id: string, request: PageRequestEnvelope): void {
+  bridge.__swiftWebRequestCallID = id;
+  bridge.__swiftWebRequestMethod = request.method;
+  bridge.__swiftWebRequestPath = request.path;
+  bridge.__swiftWebRequestSearch = request.search;
+  bridge.__swiftWebRequestScheme = request.scheme;
+  bridge.__swiftWebRequestHost = request.host;
+  bridge.__swiftWebRequestHeaders = request.encodedHeaders;
+  bridge.__swiftWebRequestBodyBase64 = request.encodedBody;
+}
+
+function take<Key, Value>(pending: Map<Key, Pending<Value>>, id: Key): Pending<Value> {
+  const call = pending.get(id);
+  if (!call) throw new Error("Unknown application call " + String(id));
+  pending.delete(id);
+  return call;
+}
+
+function rejectAll<Key, Value>(pending: Map<Key, Pending<Value>>, error: Error): void {
+  const calls = [...pending.values()];
+  pending.clear();
+  for (const call of calls) call.reject(error);
 }
 
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-function wasiInstance(instance: WebAssembly.Instance): {
-  exports: {
-    memory: WebAssembly.Memory;
-    _initialize?: () => unknown;
-  };
-} {
-  const memory = instance.exports.memory;
-  if (!(memory instanceof WebAssembly.Memory)) {
-    throw new Error("Swift/WASM instance does not export memory");
-  }
-  const initialize = instance.exports._initialize;
-  return {
-    exports: {
-      memory,
-      _initialize:
-        typeof initialize === "function" ? () => initialize() : undefined,
-    },
-  };
-}
-
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
   }
   return btoa(binary);
 }
 
-function base64ToBytes(base64: string): Uint8Array {
+function base64ToBytes(base64: string, maximumBytes = PAGE_BODY_LIMIT): Uint8Array<ArrayBuffer> {
+  if (typeof base64 !== "string") throw new TypeError("Application response must be base64 text");
+  if (base64.length > 4 * Math.ceil(maximumBytes / 3)) {
+    throw new RangeError("Application response exceeds the transport limit");
+  }
+  if (base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
+    throw new TypeError("Application response is not canonical base64");
+  }
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  const count = base64.length / 4 * 3 - padding;
+  if (count > maximumBytes) throw new RangeError("Application response exceeds the transport limit");
+  if (padding > 0) {
+    const finalValue = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+      .indexOf(base64[base64.length - padding - 1]!);
+    if ((finalValue & (padding === 2 ? 15 : 3)) !== 0) {
+      throw new TypeError("Application response is not canonical base64");
+    }
+  }
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
   return bytes;
 }

@@ -97,6 +97,7 @@ export default {
 async function validateHost(instance, mode) {
   const events = [];
   const pending = new Map();
+  const shutdownCalls = new Map();
   let cancellationFrame;
   let invocationFrame;
   let maximumFrameBytes;
@@ -105,7 +106,6 @@ async function validateHost(instance, mode) {
   let rejectPrepare;
   let didBootstrap;
   let didStart;
-  let didStop;
   const bootstrap = new Promise(resolve => { didBootstrap = resolve; });
   const startup = new Promise(resolve => { didStart = resolve; });
   globalThis.actorBoundaryFrames = (cancellation, invocation, maximum) => {
@@ -138,10 +138,17 @@ async function validateHost(instance, mode) {
   };
   globalThis.swiftWebDidInvokeActorFrame = (runtime, callID, value) => settle(runtime, callID, "completed", value);
   globalThis.swiftWebActorFrameInvocationFailed = (runtime, callID, value) => settle(runtime, callID, "failed", value);
-  globalThis.actorBoundaryStopped = outcome => {
-    events.push(["shutdown", outcome]);
-    didStop?.(outcome);
+  const settleShutdown = (runtime, callID, outcome, message) => {
+    const call = shutdownCalls.get(callID);
+    if (!call || call.runtimeID !== runtime) {
+      throw new Error(`Repeated or crossed shutdown completion: ${runtime}/${callID}`);
+    }
+    shutdownCalls.delete(callID);
+    events.push(["shutdown", runtime, callID, outcome, message]);
+    call.resolve(outcome);
   };
+  globalThis.swiftWebActorServiceShutdownCompleted = (runtime, callID) => settleShutdown(runtime, callID, "stopped");
+  globalThis.swiftWebActorServiceShutdownFailed = (runtime, callID, message) => settleShutdown(runtime, callID, "failed", message);
   instance.exports.prepare_actor_host();
   const invoke = (frame, identity = "expected", runtimeID = 42) => {
     const callID = `boundary-${++sequence}`;
@@ -160,9 +167,19 @@ async function validateHost(instance, mode) {
     instance.exports.invoke_actor_host();
     return result;
   };
-  const stop = async () => {
-    const stopped = new Promise(resolve => { didStop = resolve; });
-    instance.exports.shutdown_actor_host();
+  const stop = (runtimeID = 42) => {
+    const callID = `shutdown-${++sequence}`;
+    const stopped = new Promise(resolve => { shutdownCalls.set(callID, { runtimeID, resolve }); });
+    Object.assign(globalThis, {
+      __swiftWebRuntimeID: runtimeID,
+      __swiftWebShutdownCallID: callID,
+    });
+    instance.exports.shutdownActorService();
+    // Another runtime may prepare a bridge call while Core shutdown is awaiting.
+    Object.assign(globalThis, {
+      __swiftWebRuntimeID: 999,
+      __swiftWebShutdownCallID: "unrelated-runtime-call",
+    });
     return stopped;
   };
   Object.assign(globalThis, { __swiftWebRuntimeID: 42, __swiftWebRenderingID: 19 });
@@ -174,11 +191,13 @@ async function validateHost(instance, mode) {
   let mismatch;
   let wrongRuntime;
   let oversize;
+  let shutdown;
+  const wrongShutdownRuntime = await stop(43);
   if (mode === "startup-failure") {
     rejectPrepare(new Error("Application dependency preparation failed"));
     ready = await startup;
   } else if (mode === "startup-shutdown") {
-    await stop();
+    shutdown = await stop();
     ready = await startup;
     prepare();
     await scheduler.wait(10);
@@ -190,10 +209,11 @@ async function validateHost(instance, mode) {
     wrongRuntime = await invoke(cancellationFrame, "expected", 43);
     oversize = await invoke("A".repeat(Math.ceil(maximumFrameBytes / 3) * 4 + 4));
   }
-  await stop();
+  shutdown ??= await stop();
+  const repeatedShutdown = await stop();
   const stopped = await invoke(cancellationFrame);
-  if (pending.size !== 0) throw new Error("Host retained unfinished callbacks");
-  return { early, ready, successful, mismatch, wrongRuntime, oversize, stopped, events };
+  if (pending.size !== 0 || shutdownCalls.size !== 0) throw new Error("Host retained unfinished callbacks");
+  return { early, ready, successful, mismatch, wrongRuntime, oversize, wrongShutdownRuntime, shutdown, repeatedShutdown, stopped, events };
 }
 
 function encode(bytes) {

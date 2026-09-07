@@ -32,6 +32,10 @@ enum CloudflareActorBridge {
         nonEmpty(JSObject.global.__swiftWebActorFrameCallID.string)
     }
 
+    static var currentShutdownCallID: String? {
+        nonEmpty(JSObject.global.__swiftWebShutdownCallID.string)
+    }
+
     static func runtimeIdentity() throws -> CloudflareActorRuntimeIdentity {
         guard let runtimeID = currentRuntimeID else {
             throw CloudflareActorBridgeError.invalidValue("runtimeID")
@@ -128,6 +132,25 @@ enum CloudflareActorBridge {
 
     static func actorFrameFailed(runtimeID: Int, callID: String, message: String) {
         _ = function(named: "swiftWebActorFrameInvocationFailed")?(
+            Double(runtimeID),
+            callID,
+            message
+        )
+    }
+
+    static func actorServiceShutdownCompleted(runtimeID: Int, callID: String) {
+        _ = function(named: "swiftWebActorServiceShutdownCompleted")?(
+            Double(runtimeID),
+            callID
+        )
+    }
+
+    static func actorServiceShutdownFailed(
+        runtimeID: Int,
+        callID: String,
+        message: String
+    ) {
+        _ = function(named: "swiftWebActorServiceShutdownFailed")?(
             Double(runtimeID),
             callID,
             message

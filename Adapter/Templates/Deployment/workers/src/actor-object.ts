@@ -10,6 +10,8 @@ import {
 } from "./actor-identity";
 import { swiftWebActorFrameLimits } from "./actor-frame-limits";
 import { errorResponse, logError, readBoundedBytes } from "./http";
+// @ts-ignore
+import applicationProgram from "./app.wasm";
 
 const ACTOR_FRAME_MEDIA_TYPE = "application/vnd.swift-actor-frame";
 const ACTOR_PEER_HEADER = "X-SwiftWeb-Actor-Peer-ID";
@@ -29,7 +31,7 @@ export class SwiftWebActorObject extends DurableObject<Env> {
 
   private applicationRuntime(): Promise<ApplicationRuntime> {
     if (!this.ready) {
-      this.ready = createApplicationRuntime(this.ctx.storage)
+      this.ready = createApplicationRuntime(applicationProgram, this.ctx.storage)
         .then(async (runtime) => {
           await runtime.render();
           return runtime;

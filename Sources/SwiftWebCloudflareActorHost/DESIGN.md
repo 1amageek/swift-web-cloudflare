@@ -23,6 +23,7 @@ host does not invent a second passivation timer.
 |---|---|---|---|
 | [Package](../../DESIGN.md) | parent | Generic Cloudflare request and lifecycle boundary | Keep platform errors and raw JavaScript values inside the adapter. |
 | [Host module](../SwiftWebCloudflareHost/DESIGN.md) | coordinates with | Request client categories and shared Mutex/actor rules | The request client owns transport bytes; this module owns service admission. |
+| [Deployment common runtime](../../Adapter/Templates/Deployment/common/DESIGN.md) | coordinates with | Runtime/call ownership and terminal callback ordering | The common runtime owns registry release; this host owns Core shutdown and does not release JavaScript registrations. |
 | SwiftWeb Actors | depends on | `WebActorSystem.configureHosting`, registration, start, invoke, and shutdown | Do not duplicate Actor Core lifecycle or introduce a second RPC. |
 
 ## Architecture
@@ -37,7 +38,10 @@ bootstrap context -> configure WebActorSystem -> register application actors
                                           start -> ready -> invoke frames
                                                    |
                                                    v
-                                             shutdown -> stopped
+       common shutdown call ID -> existing shutdown() -> terminal callback
+                                                   |
+                                                   v
+                              common registry/storage release
 ```
 
 ## Contracts and Invariants
@@ -58,7 +62,11 @@ second in-flight limit that could reject a cancellation or control frame.
 Each accepted call reports exactly one completion or failure callback. A
 shutdown request rejects future calls, stops admission, and delegates Actor
 Core cleanup once; an in-flight call is allowed to settle through the Core
-contract.
+contract. The generic bridge captures the validated runtime ID and shutdown call
+ID before awaiting `shutdown()`. The thin application launcher is the only
+composition-owned export; it reports exactly one terminal success or failure
+callback and does not release the common registry, storage token, or database
+execution callback.
 
 ## State, Ownership, and Lifecycle
 
@@ -82,7 +90,9 @@ oversize input, not-ready state, cancellation, and shutdown are explicit
 failures. The host does not retry registration or invocation and does not turn
 an unknown error into success. Actor Core remains the owner of invocation
 deadline and cancellation semantics; the host only enforces the bridge's
-admission and ownership boundary.
+admission and ownership boundary. A shutdown failure still reaches the owning
+runtime as a typed terminal failure; releasing a JavaScript registration before
+that callback would strand pending promises and is prohibited.
 
 ## Verification and Change Impact
 
@@ -93,5 +103,7 @@ rejection, cancellation, exactly-once completion, and explicit shutdown across
 the real Durable Object namespace/RPC boundary. A native-only or Node-only
 test cannot substitute for that proof. This module is not compiled for the
 Embedded page/client target, so no Embedded ActorHost behavior is claimed.
-Calendar composition and DatabaseTransport injection are verified by the later
-integration work item.
+The AR-02 composition test additionally proves that the common registry remains
+live until the terminal callback and that a failed or released runtime rejects
+later callbacks. Calendar composition and DatabaseTransport injection are
+verified by the later integration work item.

@@ -8,7 +8,7 @@
     "deploy:check": "node scripts/validate-worker-bundle-size.mjs 3145728",
     "types": "wrangler types worker-configuration.d.ts --config wrangler.jsonc --include-runtime false",
     "typecheck": "npm run types && tsc --noEmit",
-    "test": "node --experimental-strip-types --test"
+    "test": "node --expose-gc --experimental-transform-types --test"
   },
   "dependencies": {
     "@bjorn3/browser_wasi_shim": "0.3.0"
