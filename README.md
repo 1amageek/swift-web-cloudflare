@@ -20,7 +20,7 @@ Add the released package to the application's `Package.swift` dependencies:
 ```swift
 .package(
     url: "https://github.com/1amageek/swift-web-cloudflare.git",
-    from: "0.5.0"
+    from: "0.6.0"
 )
 ```
 
@@ -174,9 +174,10 @@ Swift imports and JavaScript functions retain one ABI.
 The Embedded `page-worker` host installs a cancellable `scheduler.wait` clock
 for the default Actor system before rendering. Custom Actor-system clocks are
 preserved. See the [clock contract](Sources/SwiftWebCloudflareHost/DESIGN.md)
-and [local workerd validation](Validation/ActorClock/README.md). Unreleased main
-pins the reviewed SwiftWeb commit that provides this hosting SPI; a future
-semver release must replace that revision with a released dependency version.
+and [local workerd validation](Validation/ActorClock/README.md). Release 0.6.0
+pins SwiftWeb 0.13.0 at revision `c61cd26a` and JavaScriptKit 0.57.3 at the
+reviewed peeled revision `166dc39`; the release graph contains no local, branch,
+or editable package override.
 
 `sweb build` runs Wrangler's dry-run bundler and checks the compressed size of
 the complete upload, not the WASM module alone. `sweb deploy` reruns that build

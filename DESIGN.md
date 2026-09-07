@@ -40,17 +40,15 @@ ActorSystemCore -> ActorClock -> Cloudflare scheduler.wait
 
 The `page-worker` host uses Embedded WASM; the browser remains Standard WASM.
 Compiler and SDK use the same pinned Swift 6.4 snapshot. JavaScriptKit and its
-vendored JavaScript runtime use the same version. Unreleased main may pin a
-reviewed upstream Git commit; a future semver release replaces that revision
-with a released dependency version. The generated Worker build consumes that
-manifest requirement without setting `SWIFT_WEB_ROOT`. `SWIFT_WEB_ROOT` remains
-an explicit developer override when invoking this package directly; it is not
-part of generated, consumable, or validation graphs. The generated application's
-own local package path is composition of authored sources, not an external
-dependency override. Branch and local-edit overrides are not part of the
-consumable graph. The AR-01 source snapshot is the immutable SwiftWeb
-`f8bbc2a` archive with JavaScriptKit `0.57.3` at peeled revision `166dc39`;
-its vendored runtime pair must come from that same dependency snapshot.
+vendored JavaScript runtime use the same version. Release 0.6.0 pins SwiftWeb
+`0.13.0` at revision `c61cd26a` and JavaScriptKit `0.57.3` at peeled revision
+`166dc39`; the release graph contains no local, branch, or editable package
+override. The generated Worker build consumes that remote manifest requirement.
+The generated application's own local package path is composition of authored
+sources, not an external dependency override. The AR-03 artifact comparison
+must prove that this released graph preserves the selected SwiftWeb,
+JavaScriptKit, ActorSystem, product, trait, and materialized common-source
+inputs before reusing any pre-release artifact.
 
 The worker launcher imports application and Actor modules through the
 materialized Swift references. When an imported module qualifier collides with
@@ -119,9 +117,9 @@ checks, and one actual local-workerd adapter run with the pinned WASM artifact.
 The run must exercise success, rejection categories, cancellation, bounded
 frames, bootstrap admission, identity rejection, exactly-once completion, and
 explicit shutdown. Generated-build changes additionally require a template
-assertion that no implicit `SWIFT_WEB_ROOT` is exported and a materialized-file
-identity check proving that Page and service compositions use the common runtime
-owner without duplicate registries. The subsequent
+assertion that the release graph has no local SwiftWeb override and a
+materialized-file identity check proving that Page and service compositions use
+the common runtime owner without duplicate registries. The subsequent
 generated-host integration gate requires a fresh materialized graph whose
 external dependencies are remote source-control checkouts at the expected
 immutable revisions. Native tests and compile/link

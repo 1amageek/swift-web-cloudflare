@@ -12,16 +12,11 @@ let discoversSwiftWebAdapter =
 let swiftWebTraits: Set<Package.Dependency.Trait> = [
     .trait(name: "Actors", condition: .when(traits: ["Actors"]))
 ]
-let swiftWebDependency: Package.Dependency
-if let swiftWebRoot = Context.environment["SWIFT_WEB_ROOT"] {
-    swiftWebDependency = .package(path: swiftWebRoot, traits: swiftWebTraits)
-} else {
-    swiftWebDependency = .package(
-        url: "https://github.com/1amageek/swift-web.git",
-        revision: "f8bbc2a87fb21a5766bc333629125398ece15ad0",
-        traits: swiftWebTraits
-    )
-}
+let swiftWebDependency = Package.Dependency.package(
+    url: "https://github.com/1amageek/swift-web.git",
+    exact: "0.13.0",
+    traits: swiftWebTraits
+)
 
 let package = Package(
     name: "swift-web-cloudflare",
