@@ -18,7 +18,7 @@ if let swiftWebRoot = Context.environment["SWIFT_WEB_ROOT"] {
 } else {
     swiftWebDependency = .package(
         url: "https://github.com/1amageek/swift-web.git",
-        revision: "3408c74f35143539fa4b79c0785dad72dbb795a1",
+        revision: "f8bbc2a87fb21a5766bc333629125398ece15ad0",
         traits: swiftWebTraits
     )
 }
@@ -51,7 +51,7 @@ let package = Package(
         swiftWebDependency,
         // The deployment template vendors runtime.mjs from this exact release.
         // Keep the Swift library and JavaScript runtime ABI on one version.
-        .package(url: "https://github.com/1amageek/JavaScriptKit.git", exact: "0.57.2"),
+        .package(url: "https://github.com/1amageek/JavaScriptKit.git", exact: "0.57.3"),
     ],
     targets: discoversSwiftWebAdapter ? [
         .target(name: "SwiftWebCloudflareAdapterDiscovery"),
@@ -67,6 +67,7 @@ let package = Package(
                     condition: .when(platforms: [.wasi])
                 ),
             ],
+            exclude: ["DESIGN.md"],
             swiftSettings: [
                 .define("SWIFTWEB_ACTORS", .when(traits: ["Actors"])),
             ]

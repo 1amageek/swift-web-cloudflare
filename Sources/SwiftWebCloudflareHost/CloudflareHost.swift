@@ -4,6 +4,9 @@ import JavaScriptEventLoop
 #if !SWIFTWEB_PORTABLE_LOGGING
 import Logging
 #endif
+#if hasFeature(Embedded)
+import ActorSystemEmbedded
+#endif
 @_spi(Hosting) import SwiftWebActors
 @_spi(Hosting) import SwiftWebCore
 import Synchronization
@@ -33,7 +36,6 @@ public final class CloudflareHost: Sendable {
     private let sessionStorage: CloudflareSessionStorage
     private let logger: Logger
     private let actorServiceBindings: [SwiftWebActorServiceBinding]
-    private let actorRequestClient: CloudflareActorRequestClient?
 
     public init(
         serverConfiguration: ServerConfiguration = ServerConfiguration(),
@@ -44,9 +46,6 @@ public final class CloudflareHost: Sendable {
         self.serverConfiguration = serverConfiguration
         self.clientRuntime = clientRuntime
         self.actorServiceBindings = actorServiceBindings
-        self.actorRequestClient = actorServiceBindings.isEmpty
-            ? nil
-            : CloudflareActorRequestClient()
         self.sessionStorage = CloudflareSessionStorage()
         self.logger = logger
     }
@@ -97,6 +96,15 @@ public final class CloudflareHost: Sendable {
 
         Task {
             do {
+                #if SWIFTWEB_ACTORS || hasFeature(Embedded)
+                let actorRequestClient = actorServiceBindings.isEmpty
+                    ? nil
+                    : CloudflareActorRequestClient(
+                        maximumFrameByteCount: app.actorSystem.configuration.maximumFrameBytes
+                    )
+                #else
+                let actorRequestClient: CloudflareActorRequestClient? = nil
+                #endif
                 #if hasFeature(Embedded)
                 if !state.withLock({ $0.actorClockInstalled }) {
                     let installed = try app.actorSystem.installActorClock(CloudflareActorClock())

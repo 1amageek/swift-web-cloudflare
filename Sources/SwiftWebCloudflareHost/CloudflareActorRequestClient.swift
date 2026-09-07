@@ -4,7 +4,14 @@ import JavaScriptKit
 /// Bridges SwiftWeb's request/reply actor transport to the host-provided
 /// Cloudflare service-binding function.
 final class CloudflareActorRequestClient: SwiftWebActorRequestClient, Sendable {
-    private let driver = CloudflareActorRequestDriver()
+    private let driver: CloudflareActorRequestDriver
+
+    init(maximumFrameByteCount: Int) {
+        precondition(maximumFrameByteCount >= 0)
+        self.driver = CloudflareActorRequestDriver(
+            maximumFrameByteCount: maximumFrameByteCount
+        )
+    }
 
     func requestActorFrame(
         _ encodedFrame: ActorByteBuffer,
@@ -24,12 +31,14 @@ final class CloudflareActorRequestClient: SwiftWebActorRequestClient, Sendable {
 }
 
 private actor CloudflareActorRequestDriver {
+    private let maximumFrameByteCount: Int
     private var acceptsRequests = true
     private var nextRequestID: UInt64 = 0
     private var abortControllers: [UInt64: JSObject] = [:]
     private let peerID: String
 
-    init() {
+    init(maximumFrameByteCount: Int) {
+        self.maximumFrameByteCount = maximumFrameByteCount
         peerID = "swiftweb-cloudflare-\(UInt64.random(in: 1...UInt64.max))"
     }
 
@@ -46,6 +55,9 @@ private actor CloudflareActorRequestDriver {
         }
         guard nextRequestID < UInt64.max else {
             throw ActorSystemError.overloaded
+        }
+        guard frame.count <= maximumFrameByteCount else {
+            throw ActorSystemError.encodingFailed
         }
         guard let request = JSObject.global.__swiftWebActorRequest.function,
               let abortControllerConstructor = JSObject.global.AbortController.function
@@ -67,9 +79,20 @@ private actor CloudflareActorRequestDriver {
                     abort(requestID: requestID)
                     throw ActorSystemError.cancelled
                 }
+                // JavaScriptKit passes the copied buffer count to its WASM
+                // bridge as Int32; reject an unrepresentable length explicitly.
+                guard frame.count <= Int(Int32.max) else {
+                    throw ActorSystemError.encodingFailed
+                }
+                // The frame owner retains its byte-aligned storage for this
+                // synchronous borrow. JavaScriptKit copies it into one JS
+                // owner; no pointer escapes the closure or survives await.
+                let requestBody = frame.withUnsafeBytes { bytes in
+                    JSUint8Array(buffer: bytes.bindMemory(to: UInt8.self))
+                }
                 let invocation = request(
                     endpoint,
-                    JSUint8Array(frame.bytes).jsValue,
+                    requestBody.jsValue,
                     abortController.signal,
                     peerID
                 )
@@ -83,7 +106,7 @@ private actor CloudflareActorRequestDriver {
                     return nil
                 }
                 guard response.ok.boolean == true else {
-                    throw actorError(status: status)
+                    throw CloudflareActorRequestFailure.actorSystemError(status: status)
                 }
                 guard let bodyPromise = JSPromise(from: response.arrayBuffer()) else {
                     throw ActorSystemError.transportClosed
@@ -94,8 +117,28 @@ private actor CloudflareActorRequestDriver {
                 else {
                     throw ActorSystemError.decodingFailed
                 }
-                let bytes = JSUint8Array(unsafelyWrapping: constructor.new(object))
-                    .withUnsafeBytes { Array($0) }
+                let typedArray = JSUint8Array(
+                    unsafelyWrapping: constructor.new(object)
+                )
+                let byteCount: Int
+                do {
+                    byteCount = try typedArray.validatedByteLength()
+                } catch {
+                    throw ActorSystemError.decodingFailed
+                }
+                guard byteCount <= maximumFrameByteCount else {
+                    throw ActorSystemError.decodingFailed
+                }
+                // Array owns one allocation and exactly-once release. The
+                // destination is borrowed only during this synchronous copy.
+                let bytes = [UInt8](unsafeUninitializedCapacity: byteCount) {
+                    buffer,
+                    initializedCount in
+                    if byteCount > 0 {
+                        typedArray.copyMemory(to: buffer)
+                    }
+                    initializedCount = byteCount
+                }
                 return ActorByteBuffer(bytes)
             } onCancel: {
                 Task {
@@ -129,19 +172,6 @@ private actor CloudflareActorRequestDriver {
         _ = controller.abort?()
     }
 
-    private func actorError(status: Int) -> ActorSystemError {
-        switch status {
-        case 401, 403:
-            .unauthorized
-        case 408, 504:
-            .timeout
-        case 429, 503:
-            .overloaded
-        default:
-            .remoteFailure(ActorRemoteFailure(code: UInt32(clamping: status)))
-        }
-    }
-
     private func value(of promise: JSPromise) async throws -> JSValue {
         let result: Swift.Result<JSValue, CloudflareActorPromiseError> =
             await withCheckedContinuation { continuation in
@@ -150,16 +180,17 @@ private actor CloudflareActorRequestDriver {
                         continuation.resume(returning: .success(value))
                         return .undefined
                     },
-                    failure: { _ in
-                        continuation.resume(returning: .failure(.rejected))
+                    failure: { reason in
+                        let category = CloudflareActorRequestFailure.promiseCategory(
+                            for: reason
+                        )
+                        continuation.resume(
+                            returning: .failure(.rejected(category))
+                        )
                         return .undefined
                     }
                 )
             }
         return try result.get()
     }
-}
-
-private enum CloudflareActorPromiseError: Error, Sendable {
-    case rejected
 }

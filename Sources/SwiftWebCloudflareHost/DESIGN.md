@@ -5,7 +5,8 @@
 This module is a child of the [package design](../../DESIGN.md). Existing
 rendering and shared-state responsibilities remain in the linked contracts;
 this document owns the platform deadline-clock and Actor request-client
-installation boundaries.
+installation boundaries. Actor service bootstrap and admission are specified
+by the sibling [Actor host module](../SwiftWebCloudflareActorHost/DESIGN.md).
 
 ## Responsibilities and Boundaries
 
@@ -15,7 +16,9 @@ implements the existing `ActorClock` protocol using the native Worker timer;
 ActorSystemCore continues to own invocation deadlines and cancellation.
 When generated service bindings exist, the host installs the request client
 that forwards owned Actor frames to the JavaScript service bridge. It does not
-host a local Embedded distributed actor or own Actor Core shutdown.
+host a local Embedded distributed actor or own Actor Core shutdown. The request
+client converts Cloudflare-specific Promise rejection properties into the
+generic failure categories accepted by SwiftWeb and never retries a frame.
 
 ## Related Designs
 
@@ -33,6 +36,7 @@ Actor deadline task -> CloudflareActorClock -> actor-isolated driver
     -> scheduler.wait(milliseconds, { signal }) -> Promise settlement
 Task cancellation -> driver -> AbortController.abort() -> Promise rejection
 generated Actor call -> CloudflareActorRequestClient -> JavaScript service bridge
+Cloudflare rejection -> typed platform category -> SwiftWeb ActorSystem
 ```
 
 ## Contracts and Invariants
@@ -60,12 +64,21 @@ the installed Cloudflare clock. Cancellation or timeout aborts the pending
 JavaScript request and Core sends its cancellation frame after dispatch. The
 host does not select or store an application timeout.
 
+The request client receives the existing `WebActorSystem.configuration` frame
+limit when the application is rendered. It borrows the source `ActorByteBuffer`
+only while creating the JavaScript typed-array view. The service bridge owns the
+bytes after the call boundary; the Swift client copies the response into one
+`ActorByteBuffer` after checking the same configured byte bound. A rejected
+Promise is classified while its JavaScript value is still local and no raw
+Cloudflare object crosses the Sendable boundary.
+
 ## State, Ownership, and Lifecycle
 
 | State | Native storage/isolation | Standard WASM storage/isolation | Embedded WASM storage/isolation | Entry points and cleanup |
 |---|---|---|---|---|
 | Host reservation and installation flags | `Mutex<State>` | `Mutex<State>` | `Mutex<State>` | `render` reserves and updates under the same lock; host release owns storage release. |
 | Timer IDs and controllers | Driver actor | Driver actor | Driver actor | `sleep` registers, `abort` looks up, and settlement removes the entry. |
+| Request IDs, abort controllers, and admission flag | Request driver actor | Request driver actor | Request driver actor | Request dispatch owns the ID; cancellation or shutdown removes it exactly once. |
 
 Each clock retains one driver actor. Each active sleep owns one AbortController
 and one Promise observation; settlement removes its driver entry. Cancellation
@@ -88,9 +101,18 @@ and [defines the duration limit](https://github.com/cloudflare/workerd/blob/d82c
 Driver state is accessed only on its actor; no JS handle crosses the
 cancellation handler's Sendable boundary.
 
+Request cancellation has precedence over a settled error. 401/403 map to
+authorization failure, 408/504 to timeout, 429 to overload, 503 to transport
+unavailability, and all other non-success statuses to a remote failure code.
+Cloudflare `overloaded`, `retryable`, and unknown Promise rejection properties
+are classified without a retry policy in this adapter; retry ownership remains
+with the caller and idempotency policy.
+
 ## Verification and Change Impact
 
-Host tests cover duration conversion. The [local-workerd clock fixture](../../Validation/ActorClock/README.md) must
+Native tests cover duration conversion, request-category mapping, and byte
+bounds. Shutdown and cancellation are proven by the standard-WASM and Embedded
+actual-workerd ActorBoundary fixture. The [local-workerd clock fixture](../../Validation/ActorClock/README.md) must
 exercise the production clock under pinned Embedded WASM: automatic firing,
 pre-cancellation, in-flight cancellation, no later timer firing, and Core
 shutdown racing a deadline. A new platform clock or binding change requires

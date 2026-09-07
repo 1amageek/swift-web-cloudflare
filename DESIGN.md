@@ -9,15 +9,17 @@ deployment profiles and commands remain defined by [the README](README.md).
 ## Responsibilities and Boundaries
 
 SwiftWeb owns application rendering and Actor semantics. This adapter owns the
-Worker bridge, platform capabilities, and generated Worker build boundary; it
-does not add platform dependencies to ActorSystemCore or replace a resolved
-source-control dependency with a local checkout during a generated build.
+Worker bridge, platform capabilities, generated Worker build boundary, and the
+Cloudflare request/host boundary. It does not add platform dependencies to
+ActorSystemCore or replace a resolved source-control dependency with a local
+checkout during a generated build.
 
 ## Related Designs
 
 | Design | Relationship | Contract used | Cautions |
 |---|---|---|---|
 | [Host module](Sources/SwiftWebCloudflareHost/DESIGN.md) | child | Worker clock and host binding | Preserve cancellation and custom-clock ownership. |
+| [Actor host module](Sources/SwiftWebCloudflareActorHost/DESIGN.md) | child | Actor request categories, bootstrap admission, and shutdown | Keep application registration and policy outside the generic host. |
 | [Embedded page-worker validation](Validation/EmbeddedPageWorker/DESIGN.md) | child | Generated host, local service proxy, and terminal proof | This local gate is not deployment evidence. |
 | [SwiftWeb adapter contract](https://github.com/1amageek/swift-web/blob/main/docs/AdapterContract.md) | depends on | Alias-aware Swift imports, Actor module references, and launcher-only compiler flags | Do not replace compiler aliases with SwiftPM module aliases or application renames. |
 | [SwiftWeb Actors](https://github.com/1amageek/swift-web/blob/main/Sources/SwiftWebRuntime/Actors/DESIGN.md) | depends on | Hosting SPI and Actor configuration | Consume the reviewed upstream implementation. |
@@ -26,7 +28,9 @@ source-control dependency with a local checkout during a generated build.
 
 ```text
 SwiftWeb App -> CloudflareHost -> Worker bridge
-generated Actor call -> __swiftWebActorRequest -> DurableObjectNamespace RPC
+generated Actor call -> request client -> __swiftWebActorRequest -> DurableObjectNamespace RPC
+ActorSystemCore <- generic failure category / owned frame -> request client
+actor service host -> bootstrap context -> configure -> register -> admit -> invoke
 ActorSystemCore -> ActorClock -> Cloudflare scheduler.wait
 ```
 
@@ -42,7 +46,9 @@ an explicit developer override when invoking this package directly; it is not
 part of generated, consumable, or validation graphs. The generated application's
 own local package path is composition of authored sources, not an external
 dependency override. Branch and local-edit overrides are not part of the
-consumable graph.
+consumable graph. The AR-01 source snapshot is the immutable SwiftWeb
+`f8bbc2a` archive with JavaScriptKit `0.57.3` at peeled revision `166dc39`;
+its vendored runtime pair must come from that same dependency snapshot.
 
 The worker launcher imports application and Actor modules through the
 materialized Swift references. When an imported module qualifier collides with
@@ -71,11 +77,33 @@ evidence of the local proxy and Swift dispatch path, not a deployed Durable
 Object, Durable Object persistence, or a Swift service compiled to Cloudflare
 WASM.
 
+The request adapter maps Cloudflare rejection properties and HTTP status into
+the platform-independent Actor error categories before the SwiftWeb boundary:
+`overloaded`, `transportUnavailable`, `transportClosed`, `unauthorized`,
+`timeout`, and `remoteFailure`. A 503 is unavailable, not automatically
+overloaded; the adapter does not retry. Cancellation wins over a late Promise
+rejection. The adapter receives the existing `WebActorSystem.configuration`
+frame limit at installation, owns one bounded input frame for the duration of
+the JavaScript call, and materializes one owned output frame only after
+validating the returned byte length against that same limit.
+
+The actor service host receives an immutable runtime bootstrap context from the
+host bridge. It configures the shared ActorSystem, calls the application-owned
+registration closure with that context, and admits ingress only after both
+registration and system start have succeeded. Native and standard WASM host
+builds use the same `Mutex` contract; the `SWIFTWEB_ACTORS` service-host module
+is not compiled for the Embedded page/client target. Shutdown transitions to a
+terminal state and no later start or invocation is admitted where the host is
+compiled.
+
 ## Verification and Change Impact
 
-Host changes require the focused host tests and an actual local-workerd run
-with the pinned WASM artifact. Generated-build changes additionally require a
-template assertion that no implicit `SWIFT_WEB_ROOT` is exported. The subsequent
+Request/host changes require the focused Swift tests, strict common-template
+checks, and one actual local-workerd adapter run with the pinned WASM artifact.
+The run must exercise success, rejection categories, cancellation, bounded
+frames, bootstrap admission, identity rejection, exactly-once completion, and
+explicit shutdown. Generated-build changes additionally require a template
+assertion that no implicit `SWIFT_WEB_ROOT` is exported. The subsequent
 generated-host integration gate requires a fresh materialized graph whose
 external dependencies are remote source-control checkouts at the expected
 immutable revisions. Native tests and compile/link

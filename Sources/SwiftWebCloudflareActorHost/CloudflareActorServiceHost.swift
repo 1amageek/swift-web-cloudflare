@@ -11,23 +11,41 @@ import Synchronization
 /// HTML dependency. A service adapter registers its actor factories directly,
 /// then Durable Object RPC submits the ordinary SwiftWeb actor frames.
 public final class CloudflareActorServiceHost: Sendable {
+    private enum StartupOutcome: Sendable {
+        case ready
+        case failed
+        case stoppedDuringStartup
+        case ignored
+    }
+
     private enum Phase: Sendable {
         case idle
         case starting(runtimeID: Int, renderingID: Int)
         case ready(runtimeID: Int)
         case failed(runtimeID: Int)
+        case stopped
+    }
+
+    private enum ShutdownAction: Sendable {
+        case none
+        case join
+        case joinAndReportStartupFailure(runtimeID: Int, renderingID: Int)
     }
 
     private struct State: Sendable {
         var executorInstalled = false
         var phase = Phase.idle
+        var startupFailureReported = false
+        var actorShutdownStarted = false
     }
 
     private let state = Mutex(State())
     private let actorSystem: WebActorSystem
+    private let maximumFrameByteCount: Int
     private let authorization: SwiftWebActorAuthorization
     private let activationPolicy: WebActorActivationPolicy
-    private let registerActors: @Sendable (WebActorSystem) async throws -> Void
+    private let registerActors:
+        @Sendable (WebActorSystem, CloudflareActorServiceBootstrapContext) async throws -> Void
 
     public init(
         actorSystem: WebActorSystem = .shared,
@@ -39,9 +57,13 @@ public final class CloudflareActorServiceHost: Sendable {
             maximumVirtualActorCount: 1,
             idleTimeout: nil
         ),
-        registerActors: @escaping @Sendable (WebActorSystem) async throws -> Void
+        registerActors: @escaping @Sendable (
+            WebActorSystem,
+            CloudflareActorServiceBootstrapContext
+        ) async throws -> Void
     ) {
         self.actorSystem = actorSystem
+        self.maximumFrameByteCount = actorSystem.configuration.maximumFrameBytes
         self.authorization = authorization
         self.activationPolicy = activationPolicy
         self.registerActors = registerActors
@@ -94,22 +116,108 @@ public final class CloudflareActorServiceHost: Sendable {
                     authorization: authorization,
                     activationPolicy: activationPolicy
                 )
-                try await registerActors(actorSystem)
-                try await actorSystem.start()
-                state.withLock { state in
-                    state.phase = .ready(runtimeID: identity.runtimeID)
-                }
-                CloudflareActorBridge.startupCompleted(identity)
-            } catch {
-                state.withLock { state in
-                    state.phase = .failed(runtimeID: identity.runtimeID)
-                }
-                CloudflareActorBridge.startupFailed(
-                    runtimeID: identity.runtimeID,
-                    renderingID: identity.renderingID,
-                    message: errorText(error)
+                try await registerActors(
+                    actorSystem,
+                    CloudflareActorServiceBootstrapContext(
+                        runtimeID: identity.runtimeID,
+                        renderingID: identity.renderingID
+                    )
                 )
+                try await actorSystem.start()
+                let outcome = state.withLock { state -> StartupOutcome in
+                    switch state.phase {
+                    case .starting(let runtimeID, let renderingID)
+                        where runtimeID == identity.runtimeID
+                            && renderingID == identity.renderingID:
+                        state.phase = .ready(runtimeID: identity.runtimeID)
+                        return .ready
+                    case .stopped where !state.startupFailureReported:
+                        state.startupFailureReported = true
+                        return .stoppedDuringStartup
+                    default:
+                        return .ignored
+                    }
+                }
+                switch outcome {
+                case .ready:
+                    CloudflareActorBridge.startupCompleted(identity)
+                case .stoppedDuringStartup:
+                    CloudflareActorBridge.startupFailed(
+                        runtimeID: identity.runtimeID,
+                        renderingID: identity.renderingID,
+                        message: "The Cloudflare actor service stopped during startup"
+                    )
+                case .failed, .ignored:
+                    break
+                }
+            } catch {
+                let outcome = state.withLock { state -> StartupOutcome in
+                    switch state.phase {
+                    case .starting(let runtimeID, let renderingID)
+                        where runtimeID == identity.runtimeID
+                            && renderingID == identity.renderingID:
+                        state.phase = .failed(runtimeID: identity.runtimeID)
+                        state.startupFailureReported = true
+                        return .failed
+                    case .stopped where !state.startupFailureReported:
+                        state.startupFailureReported = true
+                        return .stoppedDuringStartup
+                    default:
+                        return .ignored
+                    }
+                }
+                switch outcome {
+                case .failed, .stoppedDuringStartup:
+                    CloudflareActorBridge.startupFailed(
+                        runtimeID: identity.runtimeID,
+                        renderingID: identity.renderingID,
+                        message: errorText(error)
+                    )
+                case .ready, .ignored:
+                    break
+                }
             }
+        }
+    }
+
+    /// Stops admission and joins the existing Actor Core lifecycle once.
+    public func shutdown() async throws {
+        let action = state.withLock { state -> ShutdownAction in
+            switch state.phase {
+            case .idle:
+                state.phase = .stopped
+                return .none
+            case .starting(let runtimeID, let renderingID):
+                state.phase = .stopped
+                state.actorShutdownStarted = true
+                if !state.startupFailureReported {
+                    state.startupFailureReported = true
+                    return .joinAndReportStartupFailure(
+                        runtimeID: runtimeID,
+                        renderingID: renderingID
+                    )
+                }
+                return .join
+            case .ready, .failed:
+                state.phase = .stopped
+                state.actorShutdownStarted = true
+                return .join
+            case .stopped:
+                return state.actorShutdownStarted ? .join : .none
+            }
+        }
+        switch action {
+        case .none:
+            return
+        case .join:
+            try await actorSystem.shutdown()
+        case .joinAndReportStartupFailure(let runtimeID, let renderingID):
+            CloudflareActorBridge.startupFailed(
+                runtimeID: runtimeID,
+                renderingID: renderingID,
+                message: "The Cloudflare actor service stopped during startup"
+            )
+            try await actorSystem.shutdown()
         }
     }
 
@@ -117,7 +225,9 @@ public final class CloudflareActorServiceHost: Sendable {
     public func invokeActorFrame() {
         let input: CloudflareActorFrameInput
         do {
-            input = try CloudflareActorBridge.actorFrameInput()
+            input = try CloudflareActorBridge.actorFrameInput(
+                maximumFrameByteCount: maximumFrameByteCount
+            )
         } catch {
             CloudflareActorBridge.actorFrameFailed(
                 runtimeID: CloudflareActorBridge.currentRuntimeID ?? -1,
@@ -127,7 +237,7 @@ public final class CloudflareActorServiceHost: Sendable {
             return
         }
 
-        guard isReady(runtimeID: input.runtimeID) else {
+        guard isReadyForInvocation(runtimeID: input.runtimeID) else {
             CloudflareActorBridge.actorFrameFailed(
                 runtimeID: input.runtimeID,
                 callID: input.callID,
@@ -164,7 +274,7 @@ public final class CloudflareActorServiceHost: Sendable {
         }
     }
 
-    private func isReady(runtimeID: Int) -> Bool {
+    private func isReadyForInvocation(runtimeID: Int) -> Bool {
         state.withLock { state in
             guard case .ready(let readyRuntimeID) = state.phase else {
                 return false

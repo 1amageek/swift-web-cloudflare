@@ -44,5 +44,33 @@ struct CloudflareActorRequestFailureTests {
         #expect(error == .transportClosed)
     }
 
+    @Test("Cloudflare overload and unavailable categories remain distinct")
+    func cloudflareCategoriesRemainDistinct() {
+        #expect(
+            CloudflareActorRequestFailure.actorSystemError(
+                for: CloudflareActorPromiseError.rejected(.overloaded),
+                taskWasCancelled: false
+            ) == .overloaded
+        )
+        #expect(
+            CloudflareActorRequestFailure.actorSystemError(
+                for: CloudflareActorPromiseError.rejected(.unavailable),
+                taskWasCancelled: false
+            ) == .transportUnavailable(.swiftWebHTTP)
+        )
+    }
+
+    @Test("503 is unavailable while 429 is overloaded")
+    func statusCategoriesRemainDistinct() {
+        #expect(
+            CloudflareActorRequestFailure.actorSystemError(status: 503)
+                == .transportUnavailable(.swiftWebHTTP)
+        )
+        #expect(
+            CloudflareActorRequestFailure.actorSystemError(status: 429)
+                == .overloaded
+        )
+    }
+
     private struct PromiseRejection: Error {}
 }

@@ -14,7 +14,7 @@ struct CloudflareActorFrameInput: Sendable {
     let tenantID: String?
     let remoteAddress: String?
     let peerID: String
-    let hostedActorIdentity: String?
+    let hostedActorIdentity: String
 }
 
 /// Owns the string-and-number ABI between an actor-only Swift/WASM module and
@@ -45,19 +45,42 @@ enum CloudflareActorBridge {
         )
     }
 
-    static func actorFrameInput() throws -> CloudflareActorFrameInput {
+    static func actorFrameInput(
+        maximumFrameByteCount: Int
+    ) throws -> CloudflareActorFrameInput {
+        guard maximumFrameByteCount >= 0 else {
+            throw CloudflareActorBridgeError.invalidValue("maximumFrameByteCount")
+        }
+        let maximumEncodedFrameCharacterCount =
+            CloudflareActorBase64.encodedLength(
+                forMaximumByteCount: maximumFrameByteCount
+            )
         guard let runtimeID = currentRuntimeID else {
             throw CloudflareActorBridgeError.invalidValue("runtimeID")
         }
         guard let callID = currentActorFrameCallID else {
             throw CloudflareActorBridgeError.invalidValue("actorFrameCallID")
         }
-        guard let encodedFrame = JSObject.global.__swiftWebActorFrameBase64.string,
-              let frame = CloudflareActorBase64.decode(encodedFrame) else {
+        guard let encodedFrame = JSObject.global.__swiftWebActorFrameBase64.string else {
             throw CloudflareActorBridgeError.invalidValue("actorFrame")
+        }
+        if let maximumEncodedFrameCharacterCount,
+           encodedFrame.utf8.count > maximumEncodedFrameCharacterCount {
+            throw CloudflareActorBridgeError.frameTooLarge(encodedFrame.utf8.count)
+        }
+        guard let frame = CloudflareActorBase64.decode(encodedFrame) else {
+            throw CloudflareActorBridgeError.invalidValue("actorFrame")
+        }
+        guard frame.count <= maximumFrameByteCount else {
+            throw CloudflareActorBridgeError.frameTooLarge(frame.count)
         }
         guard let peerID = nonEmpty(JSObject.global.__swiftWebActorPeerID.string) else {
             throw CloudflareActorBridgeError.invalidValue("actorPeerID")
+        }
+        guard let hostedActorIdentity = nonEmpty(
+            JSObject.global.__swiftWebHostedActorIdentity.string
+        ) else {
+            throw CloudflareActorBridgeError.invalidValue("hostedActorIdentity")
         }
         return CloudflareActorFrameInput(
             runtimeID: runtimeID,
@@ -68,9 +91,7 @@ enum CloudflareActorBridge {
             tenantID: nonEmpty(JSObject.global.__swiftWebActorTenantID.string),
             remoteAddress: nonEmpty(JSObject.global.__swiftWebActorRemoteAddress.string),
             peerID: peerID,
-            hostedActorIdentity: nonEmpty(
-                JSObject.global.__swiftWebHostedActorIdentity.string
-            )
+            hostedActorIdentity: hostedActorIdentity
         )
     }
 

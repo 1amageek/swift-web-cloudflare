@@ -4,6 +4,18 @@ enum CloudflareActorBase64 {
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
     )
 
+    static func encodedLength(forMaximumByteCount maximumByteCount: Int) -> Int? {
+        guard maximumByteCount >= 0 else {
+            return nil
+        }
+        let groupCount = maximumByteCount / 3
+            + (maximumByteCount % 3 == 0 ? 0 : 1)
+        guard groupCount <= Int.max / 4 else {
+            return nil
+        }
+        return groupCount * 4
+    }
+
     static func decode(_ string: String) -> [UInt8]? {
         var values: [UInt8] = []
         values.reserveCapacity(string.utf8.count)
