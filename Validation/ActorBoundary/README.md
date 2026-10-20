@@ -28,7 +28,9 @@ Copy the generated `ActorBoundaryValidation.wasm` to `app.wasm`, then execute
 `node run-workerd.mjs` with an outer timeout of 90 seconds.
 
 For Embedded, use the matching `_wasm-embedded` SDK,
-`JAVASCRIPTKIT_EXPERIMENTAL_EMBEDDED_WASM=1`, and whole-module optimization.
+and `JAVASCRIPTKIT_EXPERIMENTAL_EMBEDDED_WASM=1`. The matching SDK supplies
+Embedded mode and WMO to target compilation. Do not forward WMO globally through
+`-Xswiftc`: it also reaches Native macro tools and breaks their object-file plan.
 Use separate build paths for the two SDK modes: their identical target triple
 does not isolate cached objects when the SDK mode changes.
 Run the same check with `node run-workerd.mjs --requests-only`. Distributed
