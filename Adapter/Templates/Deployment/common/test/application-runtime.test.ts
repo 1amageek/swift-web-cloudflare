@@ -16,6 +16,31 @@ const request = {
   encodedHeaders: "", encodedBody: "",
 };
 
+test("Actor rejection diagnostics retain correlation and frames without messages or URLs", (t) => {
+  const logs: Record<string, unknown>[] = [];
+  t.mock.method(console, "error", (value: Record<string, unknown>) => logs.push(value));
+  const reason = new TypeError("secret authorization payload");
+  reason.stack = "TypeError: secret authorization payload\n    at readActorFrame (index.js:42:9)\n    at remote (https://service.test/path?token=secret:10:3)";
+  bridge.swiftWebActorRequestFailed(7, "7:g1-r2", "12", "dispatch", reason);
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0].name, "TypeError");
+  assert.equal(logs[0].callID, "7:g1-r2");
+  assert.equal(logs[0].requestID, "12");
+  assert.match(String(logs[0].stack), /index.js:42:9/);
+  assert.doesNotMatch(JSON.stringify(logs), /secret|authorization|service.test/);
+  bridge.swiftWebActorRequestFailed(7, "wrong\ncall", "12", "dispatch", reason);
+  bridge.swiftWebActorRequestFailed(-1, "7:g1-r2", "12", "dispatch", reason);
+  assert.equal(logs.length, 1);
+  const large = { name: "Error", stack: "message\n" + "    at frame (index.js:1:2)\n".repeat(1000) };
+  bridge.swiftWebActorRequestFailed(7, "7:g1-r2", "13", "response-body", large);
+  assert(String(logs[1].stack).length < 2048);
+  assert.doesNotThrow(() => bridge.swiftWebActorRequestFailed(7, "7:g1-r2", "14", "dispatch", {
+    get name() { throw new Error("property trap"); },
+  }));
+  t.mock.method(console, "error", () => { throw new Error("observer trap"); });
+  assert.doesNotThrow(() => bridge.swiftWebActorRequestFailed(7, "7:g1-r2", "15", "dispatch", reason));
+});
+
 test("separately loaded common modules share one isolate registry", async () => {
   const copy = await import("../src/application-runtime.ts?independent-module");
   const make = (Runtime: typeof ApplicationRuntime) => new Runtime({ exports: {

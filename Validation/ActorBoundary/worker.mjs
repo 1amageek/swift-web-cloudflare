@@ -1,9 +1,17 @@
 import { ConsoleStdout, File, OpenFile, WASI } from "@bjorn3/browser_wasi_shim";
 import { SwiftRuntime } from "../../Adapter/Templates/Deployment/common/src/runtime.mjs";
+import "../../Adapter/Templates/Deployment/common/src/application-runtime.ts";
+import { createPageRuntimeCoordinator } from "../../Adapter/Templates/Deployment/common/src/application-runtime.ts";
+import { DurableObject } from "cloudflare:workers";
 import program from "./app.wasm";
 
 export default {
   async fetch(request, environment) {
+    if (new URL(request.url).pathname.startsWith("/pages/")) {
+      const url = new URL(request.url);
+      url.pathname = url.pathname.slice(6);
+      return environment.PAGE.getByName("page-isolation").fetch(new Request(url, request));
+    }
     const wasi = new WASI([], [], [
       new OpenFile(new File([])),
       ConsoleStdout.lineBuffered(console.log),
@@ -42,6 +50,14 @@ export default {
     }
 
     const calls = {};
+    const diagnostics = [];
+    const errors = {};
+    const reportFailure = globalThis.swiftWebActorRequestFailed;
+    globalThis.swiftWebActorRequestFailed = (runtimeID, callID, requestID, phase, reason) => {
+      diagnostics.push({ runtimeID, callID, requestID, phase });
+      reportFailure(runtimeID, callID, requestID, phase, reason);
+    };
+    globalThis.actorBoundaryErrorDiagnostic = (scenario, text) => { errors[scenario] = text; };
     let aborted = 0;
     globalThis.__swiftWebActorRequest = async (endpoint, frame, signal, peerID) => {
       if (!(frame instanceof Uint8Array) || !peerID || !(signal instanceof AbortSignal)) {
@@ -90,9 +106,52 @@ export default {
     }
     delete globalThis.actorBoundaryCompleted;
     delete globalThis.__swiftWebActorRequest;
-    return Response.json({ outcomes, calls, aborted });
+    delete globalThis.actorBoundaryErrorDiagnostic;
+    globalThis.swiftWebActorRequestFailed = reportFailure;
+    return Response.json({ outcomes, calls, aborted, diagnostics, errors });
   },
 };
+
+export class PageIsolationProbe extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.held = [];
+    this.diagnostics = [];
+    this.violations = [];
+    this.coordinator = createPageRuntimeCoordinator(program, {
+      retirementThresholdBytes: 80 * 1024 * 1024,
+      reportProtocolViolation: error => this.violations.push(error.message),
+    });
+    globalThis.failureProbeHold = () => new Promise(resolve => {
+      this.held.push(resolve);
+      if (this.held.length === 2) this.cancelFirst?.();
+    });
+    const report = globalThis.swiftWebActorRequestFailed;
+    globalThis.swiftWebActorRequestFailed = (...args) => { this.diagnostics.push(args.slice(0, 4)); report(...args); };
+    globalThis.__swiftWebActorRequest = async () => { throw new TypeError("private failure message"); };
+  }
+
+  async fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === "/release") { this.held.splice(0).forEach(resolve => resolve()); return new Response("released"); }
+    if (path === "/state") return Response.json({ pending: this.coordinator.pendingRenderCount,
+      diagnostics: this.diagnostics, violations: this.violations });
+    const signal = new AbortController();
+    if (path === "/cancelled") this.cancelFirst = () => signal.abort();
+    try {
+      const response = await this.coordinator.render(undefined, {
+        method: "GET", path: path === "/cancelled" ? "/hold" : path,
+        search: "", scheme: "https", host: "probe.test", encodedHeaders: "", encodedBody: "",
+      }, signal.signal);
+      return Response.json({ status: response.status, body: new TextDecoder().decode(response.body) }, { status: response.status });
+    } catch (error) {
+      if (error.name !== "PageRequestCancellationError") throw error;
+      return Response.json({ name: error.name, retained: this.coordinator.pendingRenderCount }, { status: 499 });
+    } finally {
+      if (path === "/cancelled") this.cancelFirst = undefined;
+    }
+  }
+}
 
 async function validateHost(instance, mode) {
   const events = [];

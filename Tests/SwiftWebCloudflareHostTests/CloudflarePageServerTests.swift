@@ -10,8 +10,23 @@ import XCTest
 
 @_spi(Hosting) import SwiftWebCore
 @testable import SwiftWebCloudflareHost
+@_spi(Hosting) import SwiftWebActors
 
 final class CloudflarePageServerTests: XCTestCase {
+    func testRouteFailureKeepsThePublicBodyGeneric() async throws {
+        let renderedApp = try await AppRenderer.render(CloudflareFixtureApp(), in: AppRenderingContext())
+        let server = CloudflarePageServer(renderedApp: renderedApp,
+            sessionStorage: CloudflareSessionStorage(), logger: Logger(label: "swiftweb.cloudflare.tests"))
+        let response = await server.respond(to: CloudflarePageRequest(runtimeID: 9, callID: "9:g1-r1",
+            method: "GET", path: "/failure", search: nil, scheme: "https", host: "cloudflare.test",
+            headers: [], bodyBase64: nil))
+        XCTAssertEqual(response.status, 500)
+        let body = String(decoding: try XCTUnwrap(Base64Coding.decode(response.bodyBase64)), as: UTF8.self)
+        XCTAssertTrue(body.contains("Something went wrong"))
+        XCTAssertFalse(body.contains("transportClosed"))
+        XCTAssertFalse(body.contains("actor-system"))
+        XCTAssertFalse(body.contains("9:g1-r1"))
+    }
     func testWorkerBuildTemplateDoesNotInjectSwiftWebRoot() throws {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -90,6 +105,9 @@ final class CloudflarePageServerTests: XCTestCase {
 
 private struct CloudflareFixtureApp: App {
     var body: some Scene {
+        Endpoint("/failure") { _ -> Response in
+            throw ActorSystemError.transportClosed
+        }
         Endpoint("/health") { _ in
             Response(body: .init(string: "cloudflare"))
         }

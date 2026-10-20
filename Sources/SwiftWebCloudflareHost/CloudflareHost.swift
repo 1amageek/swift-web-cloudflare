@@ -196,7 +196,11 @@ public final class CloudflareHost: Sendable {
                 )
                 return
             }
-            let response = await installation.respond(to: rawRequest)
+            let response = await CloudflareRequestDiagnostics.$current.withValue(
+                CloudflareRequestDiagnostics(runtimeID: rawRequest.runtimeID, callID: rawRequest.callID)
+            ) {
+                await installation.respond(to: rawRequest)
+            }
             CloudflareWorkerBridge.requestCompleted(
                 runtimeID: rawRequest.runtimeID,
                 callID: rawRequest.callID,

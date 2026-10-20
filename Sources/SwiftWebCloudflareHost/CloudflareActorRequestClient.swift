@@ -100,7 +100,7 @@ private actor CloudflareActorRequestDriver {
                 guard let promise = JSPromise(from: invocation) else {
                     throw ActorSystemError.transportClosed
                 }
-                let response = try await value(of: promise)
+                let response = try await value(of: promise, requestID: requestID, phase: "dispatch")
                 let status = Int(response.status.number ?? 0)
                 if status == 204 {
                     return nil
@@ -111,7 +111,7 @@ private actor CloudflareActorRequestDriver {
                 guard let bodyPromise = JSPromise(from: response.arrayBuffer()) else {
                     throw ActorSystemError.transportClosed
                 }
-                let buffer = try await value(of: bodyPromise)
+                let buffer = try await value(of: bodyPromise, requestID: requestID, phase: "response-body")
                 guard let object = buffer.object,
                       let constructor = JSObject.global.Uint8Array.function
                 else {
@@ -172,7 +172,8 @@ private actor CloudflareActorRequestDriver {
         _ = controller.abort?()
     }
 
-    private func value(of promise: JSPromise) async throws -> JSValue {
+    private func value(of promise: JSPromise, requestID: UInt64, phase: String) async throws -> JSValue {
+        let diagnostics = CloudflareRequestDiagnostics.current
         let result: Swift.Result<JSValue, CloudflareActorPromiseError> =
             await withCheckedContinuation { continuation in
                 _ = promise.then(
@@ -181,6 +182,9 @@ private actor CloudflareActorRequestDriver {
                         return .undefined
                     },
                     failure: { reason in
+                        CloudflareRequestDiagnostics.$current.withValue(diagnostics) {
+                            CloudflareRequestDiagnostics.reportRejection(reason, requestID: requestID, phase: phase)
+                        }
                         let category = CloudflareActorRequestFailure.promiseCategory(
                             for: reason
                         )

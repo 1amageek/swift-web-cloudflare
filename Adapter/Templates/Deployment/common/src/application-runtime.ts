@@ -102,6 +102,32 @@ const runtimeScope = globalThis as typeof globalThis & {
 const registry = runtimeScope[registryKey] ??= new ApplicationRuntimeRegistry();
 const bridge = globalThis as typeof globalThis & ActorFrameInvocationBridge & Record<string, unknown>;
 
+bridge.swiftWebActorRequestFailed = (
+  runtimeID: unknown, callID: unknown, requestID: unknown,
+  phase: unknown, reason: unknown,
+): void => {
+  try {
+    if (typeof runtimeID !== "number" || !Number.isSafeInteger(runtimeID)
+        || runtimeID < 0 || runtimeID > maximumRuntimeID || typeof callID !== "string"
+        || callID.length > 128 || !/^[\w:.-]*$/.test(callID)
+        || typeof requestID !== "string" || !/^[0-9]{1,20}$/.test(requestID)
+        || (phase !== "dispatch" && phase !== "response-body")) return;
+    const error = typeof reason === "object" && reason !== null
+      ? reason as { name?: unknown; stack?: unknown } : undefined;
+    const name = typeof error?.name === "string" && /^[\w.$]{1,128}$/.test(error.name)
+      ? error.name : "Error";
+    // Do not log the first stack line (the message), URLs or arbitrary properties.
+    const stack = typeof error?.stack === "string" ? error.stack.slice(0, 8192)
+      .split("\n").slice(1, 9).filter(line => /^\s+at /.test(line))
+      .map(line => line.replace(/\b(?:https?|file):\/\/[^\s)]+/g, "[location]").slice(0, 256))
+      .join("\n") : "";
+    console.error({ event: "swiftweb.actor_request.failed", runtimeID, callID,
+      requestID, phase, name, stack });
+  } catch {
+    // Diagnostics must not replace the transport's original failure.
+  }
+};
+
 function dispatch<Key extends keyof RuntimeCallbacks>(
   runtimeID: number, name: Key, ...arguments_: Parameters<NonNullable<RuntimeCallbacks[Key]>>
 ): void {

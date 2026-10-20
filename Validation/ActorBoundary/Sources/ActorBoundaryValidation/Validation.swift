@@ -6,10 +6,12 @@ import ActorSystemEmbedded
 @_spi(Hosting) @testable import SwiftWebCloudflareHost
 import SwiftWebCloudflareActorHost
 @_spi(Hosting) import SwiftWebActors
+import SwiftWebCore
 
 @main
 struct ActorBoundaryValidation {
     static func main() {}
+    static let pageHost = CloudflareHost()
 
     #if !hasFeature(Embedded)
     static let host = CloudflareActorServiceHost(authorization: .allowAll) { _, context in
@@ -56,6 +58,14 @@ struct ActorBoundaryValidation {
     #endif
 
     static func validateRequest(_ scenario: Int32) async {
+        await CloudflareRequestDiagnostics.$current.withValue(
+            .init(runtimeID: 7, callID: "7:g1-r\(scenario + 1)")
+        ) {
+            await performRequest(scenario)
+        }
+    }
+
+    static func performRequest(_ scenario: Int32) async {
         let client = CloudflareActorRequestClient(
             maximumFrameByteCount: WebActorSystem.shared.configuration.maximumFrameBytes
         )
@@ -96,6 +106,7 @@ struct ActorBoundaryValidation {
                 outcome = "empty"
             }
         } catch let error as ActorSystemError {
+            _ = JSObject.global.actorBoundaryErrorDiagnostic?(Double(scenario), HostErrorText.of(error))
             switch error {
             case .overloaded: outcome = "overloaded"
             case .transportUnavailable: outcome = "unavailable"
@@ -110,6 +121,14 @@ struct ActorBoundaryValidation {
         _ = JSObject.global.actorBoundaryCompleted?(Double(scenario), outcome)
     }
 }
+
+@_expose(wasm, "renderApplication")
+@c(renderApplication)
+func startPageRendering() { ActorBoundaryValidation.pageHost.render(FailureProbeApp()) }
+
+@_expose(wasm, "respondToRequest")
+@c(respondToRequest)
+func servePageRequest() { ActorBoundaryValidation.pageHost.respondToRequest() }
 
 @_expose(wasm, "validate_actor_request")
 @_cdecl("validate_actor_request")

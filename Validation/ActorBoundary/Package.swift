@@ -7,7 +7,7 @@ let package = Package(
     platforms: [.macOS("26.2")],
     dependencies: [
         .package(path: "../..", traits: embedded ? [] : ["Actors"]),
-        .package(path: Context.environment["SWIFT_WEB_ROOT"] ?? "../../../swift-web", traits: embedded ? [] : ["Actors"]),
+        .package(url: "https://github.com/1amageek/swift-web.git", exact: "0.13.0", traits: embedded ? [] : ["Actors"]),
         .package(url: "https://github.com/1amageek/JavaScriptKit.git", exact: "0.57.3"),
     ],
     targets: [
@@ -17,6 +17,7 @@ let package = Package(
                 .product(name: "SwiftWebCloudflareHost", package: "swift-web-cloudflare"),
                 .product(name: "SwiftWebCloudflareActorHost", package: "swift-web-cloudflare"),
                 .product(name: "SwiftWebActors", package: "swift-web"),
+                .product(name: "SwiftWebCore", package: "swift-web"),
                 .product(name: "JavaScriptKit", package: "JavaScriptKit"),
                 .product(name: "JavaScriptEventLoop", package: "JavaScriptKit"),
             ],

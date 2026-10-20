@@ -132,6 +132,12 @@ or release state early. Actor Core controls frame admission, cancellation, and
 in-flight ordering; the common registry must not impose a duplicate raw-frame
 concurrency limit.
 
+The actor-request diagnostic bridge accepts captured runtime, Page call,
+transport request and phase IDs from Swift. It reports bounded error names and
+stack frames before Swift reduces a rejection to an Actor category. Messages,
+HTTP/file URLs, request bytes and arbitrary properties are excluded. Malformed values or
+a throwing console never replace the original failure.
+
 The global index never strongly retains the DO, WASM instance, storage handle,
 or application execution callback. Lookup promotes a weak registration to a
 strong local only for dispatch. FinalizationRegistry deletes primitive routing

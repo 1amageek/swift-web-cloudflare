@@ -79,6 +79,7 @@ Cloudflare object crosses the Sendable boundary.
 | Host reservation and installation flags | `Mutex<State>` | `Mutex<State>` | `Mutex<State>` | `render` reserves and updates under the same lock; host release owns storage release. |
 | Timer IDs and controllers | Driver actor | Driver actor | Driver actor | `sleep` registers, `abort` looks up, and settlement removes the entry. |
 | Request IDs, abort controllers, and admission flag | Request driver actor | Request driver actor | Request driver actor | Request dispatch owns the ID; cancellation or shutdown removes it exactly once. |
+| Diagnostic correlation | Immutable task-local value | Immutable task-local value | Immutable task-local value | Host captures IDs before dispatch; lexical scope restores its predecessor after every exit. |
 
 Each clock retains one driver actor. Each active sleep owns one AbortController
 and one Promise observation; settlement removes its driver entry. Cancellation
@@ -108,6 +109,16 @@ Cloudflare `overloaded`, `retryable`, and unknown Promise rejection properties
 are classified without a retry policy in this adapter; retry ownership remains
 with the caller and idempotency policy.
 
+Page diagnostics capture immutable runtime/call IDs before asynchronous work
+and propagate them in a task-local scope on every target. Diagnostics never
+read mutable bridge IDs after an await. Known Actor failures use stable numeric
+codes on Native, WASM and Embedded; unknown Embedded errors are explicitly
+unclassified. Public HTTP error bodies remain generic. Promise rejection is
+reported before classification with its transport request ID and phase, while
+the JS value is local. The common bridge bounds names/stacks and excludes error
+messages, endpoint URLs, request data and arbitrary properties. Reporting never
+changes error categories, cancellation precedence or retry behavior.
+
 ## Verification and Change Impact
 
 Native tests cover duration conversion, request-category mapping, and byte
@@ -122,3 +133,6 @@ generated request client, actual local Durable Object namespace/RPC, Native
 `WebActorSystem` service peer backed by `SwiftActorSystem`, failures, deadline,
 and terminal cleanup. A direct JavaScript request-handler substitution does not
 prove that boundary.
+Diagnostic tests verify known codes, task-local isolation/restoration, generic
+HTTP errors and bounded JS reporting. A release-toolchain Embedded runtime
+probe executes the diagnostic bridge; Native results alone are insufficient.

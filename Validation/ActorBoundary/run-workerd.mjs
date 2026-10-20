@@ -16,7 +16,7 @@ const bundled = await build({
   bundle: true,
   format: "esm",
   platform: "browser",
-  external: ["./app.wasm"],
+  external: ["./app.wasm", "cloudflare:workers"],
   write: false,
 });
 const runtime = new Miniflare({
@@ -27,9 +27,9 @@ const runtime = new Miniflare({
       modulesRoot: root,
       modules: [
         { type: "ESModule", path: resolve(root, "probe.mjs"), contents: bundled.outputFiles[0].text },
-        { type: "CompiledWasm", path: resolve(root, "app.wasm"), contents: await readFile(resolve(root, "app.wasm")) },
+        { type: "CompiledWasm", path: resolve(root, "app.wasm"), contents: await readFile(process.env.SWIFT_WEB_ACTOR_PROGRAM ?? resolve(root, "app.wasm")) },
       ],
-      durableObjects: { ECHO: { className: "Echo", scriptName: "actor-peer" } },
+      durableObjects: { ECHO: { className: "Echo", scriptName: "actor-peer" }, PAGE: { className: "PageIsolationProbe" } },
     },
     {
       name: "actor-peer",
@@ -62,6 +62,36 @@ try {
   assert.equal(Object.keys(report.calls).length, 9);
   assert.ok(Object.values(report.calls).every(count => count === 1), "The adapter must not retry");
   assert.equal(report.aborted, 2, "Cancellation and shutdown must both abort the platform request");
+  assert.equal(report.diagnostics.length, 6);
+  for (const diagnostic of report.diagnostics) {
+    assert.equal(diagnostic.runtimeID, 7);
+    assert.match(diagnostic.callID, /^7:g1-r[1-9][0-9]*$/);
+    assert.equal(diagnostic.requestID, "1");
+    assert.equal(diagnostic.phase, "dispatch");
+  }
+  assert.equal(report.errors[3], "runtime=7 call=7:g1-r4 actor-system:14");
+  assert.equal(report.errors[4], "runtime=7 call=7:g1-r5 actor-system:16");
+  const interrupted = runtime.dispatchFetch("http://actor-boundary.test/pages/cancelled");
+  const peer = runtime.dispatchFetch("http://actor-boundary.test/pages/hold");
+  const cancelledResponse = await interrupted;
+  const cancelled = await cancelledResponse.json();
+  assert.equal(cancelledResponse.status, 499);
+  assert.equal(cancelled.name, "PageRequestCancellationError");
+  assert.equal(cancelled.retained, 2);
+  await runtime.dispatchFetch("http://actor-boundary.test/pages/release");
+  assert.equal((await peer).status, 200);
+  assert.equal((await runtime.dispatchFetch("http://actor-boundary.test/pages/health")).status, 200);
+  const failed = await runtime.dispatchFetch("http://actor-boundary.test/pages/transport");
+  const failure = await failed.json();
+  assert.equal(failed.status, 500);
+  assert.match(failure.body, /Something went wrong/);
+  assert.doesNotMatch(failure.body, /private|actor-system|g1-r/);
+  const pages = await (await runtime.dispatchFetch("http://actor-boundary.test/pages/state")).json();
+  assert.equal(pages.pending, 0);
+  assert.deepEqual(pages.violations, []);
+  assert.equal(pages.diagnostics.length, 1);
+  assert.match(pages.diagnostics[0][1], /^[0-9]+:g1-r4$/);
+  console.log(JSON.stringify({ pageIsolation: pages, cancelled }));
   const hostModes = process.argv.includes("--requests-only") ? [] : ["host", "startup-failure", "startup-shutdown"];
   for (const mode of hostModes) {
     const response = await runtime.dispatchFetch(`http://actor-boundary.test/${mode}`);

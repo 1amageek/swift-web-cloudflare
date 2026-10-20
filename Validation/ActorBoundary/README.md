@@ -16,9 +16,8 @@ inspector GC confirms the registry does not retain the discarded DO, WASM memory
 or storage handle. This fixture verifies TypeScript ownership, not Swift Core
 shutdown, and never assumes a graceful eviction callback.
 
-Use Swift `swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-08-14-a` with its matching
-`_wasm` SDK. Set `SWIFT_WEB_ROOT` to the SwiftWeb source selected by the root
-package and `SWIFT_WEB_NODE_MODULES` to installed deployment dependencies
+Use Swift `swift-6.4.0-RELEASE` with its matching `_wasm` SDK. SwiftWeb is pinned
+to the root package's remote `0.13.0` requirement. Set `SWIFT_WEB_NODE_MODULES` to installed deployment dependencies
 (esbuild, Miniflare, and browser_wasi_shim).
 
 Build this package with `SWIFTWEB_HOSTED_APPLICATION=1`, `--build-system native`,
@@ -36,3 +35,16 @@ Run the same check with `node run-workerd.mjs --requests-only`. Distributed
 actor hosting is not compiled for Embedded; request-client behavior is the
 shared boundary under test. Keep Native, standard WASM, and Embedded artifacts
 and results distinct.
+
+Set `SWIFT_WEB_ACTOR_PROGRAM` to the freshly built program to keep the retained
+historical `app.wasm` unchanged. The requests gate also checks captured runtime,
+Page call and transport request identities across Promise rejection, and
+reflection-free Actor failure codes on both WASM profiles.
+
+The `/pages` gate runs the actual Swift `CloudflareHost` and production common
+coordinator. Two Swift routes suspend; cancelling one caller retains both
+in-flight registrations until their completions, while its peer and the next
+request return 200. A real Promise rejection through the Swift request client
+then produces a request-correlated internal diagnostic and a generic HTTP 500.
+No synthetic callback replaces that Page completion path. The explicit gates
+and outer process deadline bound the probe; it performs no production request.

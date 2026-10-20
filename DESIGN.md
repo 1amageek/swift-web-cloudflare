@@ -39,7 +39,9 @@ ActorSystemCore -> ActorClock -> Cloudflare scheduler.wait
 ## Contracts and Invariants
 
 The `page-worker` host uses Embedded WASM; the browser remains Standard WASM.
-Compiler and SDK use the same pinned Swift 6.4 snapshot. JavaScriptKit and its
+Compiler and SDK use the same pinned Swift 6.4 version; the current request
+boundary validation uses Swift 6.4.0 release and its matching SDKs. Historical
+snapshot fixture evidence remains scoped to that snapshot. JavaScriptKit and its
 vendored JavaScript runtime use the same version. Release 0.6.0 pins SwiftWeb
 `0.13.0` at revision `c61cd26a` and JavaScriptKit `0.57.3` at peeled revision
 `166dc39`; the release graph contains no local, branch, or editable package
@@ -86,6 +88,9 @@ rejection. The adapter receives the existing `WebActorSystem.configuration`
 frame limit at installation, owns one bounded input frame for the duration of
 the JavaScript call, and materializes one owned output frame only after
 validating the returned byte length against that same limit.
+
+Internal failure correlation follows the Host and deployment-common diagnostic
+contracts without changing Actor error categories or public HTTP error bodies.
 
 The actor service host receives an immutable runtime bootstrap context from the
 host bridge. It configures the shared ActorSystem, calls the application-owned
