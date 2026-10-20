@@ -100,7 +100,9 @@ The deployment-common runtime owns the isolate-wide `ApplicationRuntimeRegistry`
 Each composition registers a runtime with a unique runtime ID and an optional
 storage token; callback dispatch first resolves that owner and rejects unknown,
 mismatched, or released IDs. Page retirement remains a generation-local
-operation and has no shutdown export. Actor service stop is a separate terminal
+operation and has no shutdown export. Caller cancellation follows the request-local wait and bounded
+in-flight ownership contract in the deployment-common design; it does not
+release a shared Page generation. Actor service stop retains its terminal
 handshake: the common registry reserves a unique shutdown call ID, the thin
 application launcher delegates to `CloudflareActorServiceHost.requestShutdown()`,
 which awaits the existing `shutdown()` operation. The bridge captures

@@ -150,33 +150,27 @@ export class PageRuntimeCoordinator<Runtime, Environment> {
     cancellationSignal?: AbortSignal,
   ): Promise<PageResponse> {
     const cancellationError = new PageRequestCancellationError();
-    let cancellationGeneration:
-      PageRuntimeGeneration<Runtime> | null = null;
-    const cancel = () => {
-      if (cancellationGeneration !== null) {
-        this.terminateGeneration(cancellationGeneration, cancellationError);
-      }
-    };
     if (cancellationSignal?.aborted) {
       throw cancellationError;
     }
+    let cancel: () => void = () => undefined;
+    const cancellation = new Promise<never>((_, reject) => {
+      cancel = () => reject(cancellationError);
+    });
     cancellationSignal?.addEventListener("abort", cancel, { once: true });
 
     try {
       let generationReadiness = this.loadActiveGeneration(environment);
-      cancellationGeneration = this.activeRuntime?.generation ?? null;
-      let generation = await generationReadiness;
+      let generation = await Promise.race([generationReadiness, cancellation]);
       if (generation.state !== "ready"
           || this.adapter.memoryByteCount(this.requireRuntime(generation))
             >= this.retirementThresholdBytes) {
         this.retireGeneration(generation);
         generationReadiness = this.loadActiveGeneration(environment);
-        cancellationGeneration = this.activeRuntime?.generation ?? null;
-        generation = await generationReadiness;
+        generation = await Promise.race([generationReadiness, cancellation]);
       }
 
       if (cancellationSignal?.aborted) {
-        cancel();
         throw cancellationError;
       }
 
@@ -209,7 +203,8 @@ export class PageRuntimeCoordinator<Runtime, Environment> {
       }
 
       try {
-        return await response;
+        // The registry still owns dispatched work after its caller stops waiting.
+        return await Promise.race([response, cancellation]);
       } finally {
         this.releaseInactiveGenerationIfIdle(generation);
       }

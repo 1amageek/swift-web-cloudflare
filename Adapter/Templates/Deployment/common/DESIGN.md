@@ -74,6 +74,16 @@ generation only after its pending start/render calls settle; the Page launcher
 has no shutdown export. Durable Object eviction may reconstruct a runtime and
 does not imply a graceful callback.
 
+Caller cancellation rejects only that caller's wait, including during shared
+cold start. It never terminates a generation or unregisters its callbacks.
+Already-dispatched Swift work remains counted against the existing render
+capacity until its matching success/failure callback or existing deadline.
+Late completion after caller cancellation is therefore an owned completion,
+not an unknown callback. This cancels the caller's wait; the Page launcher has
+no Swift task-cancellation export. Runtime traps, protocol violations and
+deadlines retain their generation-failure contract. No cancelled-call
+tombstones or unbounded detached registries are introduced.
+
 Actor service shutdown is explicit. The common registry reserves a unique
 `shutdownCallID` and marks admission as stopping. The thin application launcher
 delegates to the existing Swift `CloudflareActorServiceHost.shutdown()` through
@@ -140,6 +150,10 @@ Page retirement, and Actor shutdown terminal ordering. Materialized-file checks
 prove that Page and service compositions use the common files without duplicate
 registries. The local-workerd adapter fixture owns the actual WASM/DO callback
 and shutdown proof; native or Node-only tests cannot claim that boundary.
+Cancellation regressions also cover a cancelled cold-start waiter with a live
+peer, in-flight peers, retained capacity, late success/failure, retirement and
+deadline cleanup. A common-registry test delivers a bridge callback after
+cancellation without reporting an unknown runtime.
 
 Moved Page source is checked with the common strict/no-unchecked-index policy.
 The official JavaScriptKit declaration file retains its upstream DOM-oriented

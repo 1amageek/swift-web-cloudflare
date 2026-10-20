@@ -7,6 +7,7 @@ import {
   ApplicationRuntimeRegistry,
   createPageRuntimeCoordinator,
 } from "../src/application-runtime.ts";
+import { PageRequestCancellationError } from "../src/PageRequestCancellation.ts";
 
 const bridge = globalThis as Record<string, any>;
 const context = { peerID: "caller", hostedActorIdentity: "expected" };
@@ -180,6 +181,46 @@ test("two Page coordinators share one routing table without crossing local gener
   await until(() => renders.length === 3);
   bridge.swiftWebDidRespond(...renders[2], 200, "", "Qw==");
   assert.equal((await replacement).body[0], 67);
+});
+
+test("cancelled Page retains callback routing through retirement and a live peer", async (t) => {
+  const errors: unknown[][] = [];
+  t.mock.method(console, "error", (...values: unknown[]) => errors.push(values));
+  const starts: [number, number][] = [];
+  const renders: [number, string][] = [];
+  const memories: WebAssembly.Memory[] = [];
+  const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+  t.mock.method(WebAssembly, "instantiate", async () => {
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    memories.push(memory);
+    return { exports: {
+      memory,
+      swjs_library_version() { return 709; },
+      renderApplication() { starts.push([bridge.__swiftWebRuntimeID, bridge.__swiftWebRenderingID]); },
+      respondToRequest() { renders.push([bridge.__swiftWebRuntimeID, bridge.__swiftWebRequestCallID]); },
+    } };
+  });
+  const coordinator = createPageRuntimeCoordinator(module, { retirementThresholdBytes: 131072 });
+  const signal = new AbortController();
+  const cancelled = coordinator.render(undefined, request, signal.signal);
+  const peer = coordinator.render(undefined, request);
+  await until(() => starts.length === 1);
+  bridge.swiftWebDidRender(...starts[0]);
+  await until(() => renders.length === 2);
+  signal.abort();
+  await assert.rejects(cancelled, PageRequestCancellationError);
+  memories[0].grow(1);
+  const replacement = coordinator.render(undefined, request);
+  await until(() => starts.length === 2);
+  bridge.swiftWebDidRender(...starts[1]);
+  await until(() => renders.length === 3);
+  bridge.swiftWebResponseFailed(...renders[0], "cancelled caller's late error");
+  bridge.swiftWebDidRespond(...renders[1], 200, "", "");
+  bridge.swiftWebDidRespond(...renders[2], 200, "", "");
+  assert.equal((await peer).status, 200);
+  assert.equal((await replacement).status, 200);
+  assert.equal(coordinator.pendingRenderCount, 0);
+  assert.equal(errors.length, 0);
 });
 
 test("routing does not retain a discarded runtime or its storage owner", async () => {

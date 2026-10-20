@@ -340,7 +340,7 @@ test("a render timeout terminates only its generation and releases capacity", as
   assert.equal(adapter.instances.length, 2);
 });
 
-test("request cancellation terminates its generation and permits retry", async () => {
+test("cancelled render retains bounded ownership until its late completion", async () => {
   const { adapter, coordinator } = makeCoordinator({
     maximumPendingRenders: 1,
   });
@@ -356,14 +356,67 @@ test("request cancellation terminates its generation and permits retry", async (
   cancellation.abort();
   await assert.rejects(cancelled, PageRequestCancellationError);
   assert.equal(coordinator.pendingStartCount, 0);
+  assert.equal(coordinator.pendingRenderCount, 1);
+  assert.equal(adapter.released.length, 0);
+  await assert.rejects(coordinator.render("environment", request), PageCallCapacityError);
+  coordinator.didRenderPage(adapter.renders[0].renderID, 200, "", "");
   assert.equal(coordinator.pendingRenderCount, 0);
 
   const retry = coordinator.render("environment", request);
-  await startGeneration(adapter, coordinator, 1);
   await waitFor(() => adapter.renders.length === 2);
   coordinator.didRenderPage(adapter.renders[1].renderID, 200, "", "");
   await retry;
-  assert.equal(adapter.instances.length, 2);
+  assert.equal(adapter.instances.length, 1);
+});
+
+test("cancelling one cold-start waiter does not abort shared startup", async () => {
+  const { adapter, coordinator } = makeCoordinator();
+  adapter.holdInstantiation = true;
+  const signal = new AbortController();
+  const cancelled = coordinator.render("environment", request, signal.signal);
+  const peer = coordinator.render("environment", request);
+  await waitFor(() => adapter.instances.length === 1);
+  signal.abort();
+  await assert.rejects(cancelled, PageRequestCancellationError);
+  assert.equal(coordinator.pendingStartCount, 1);
+  assert.equal(adapter.released.length, 0);
+  adapter.releaseHeldInstantiations();
+  await startGeneration(adapter, coordinator, 0);
+  await waitFor(() => adapter.renders.length === 1);
+  coordinator.didRenderPage(adapter.renders[0].renderID, 200, "", "");
+  await peer;
+  assert.equal(adapter.instances.length, 1);
+});
+
+test("cancelled render and late failure cannot poison an in-flight peer", async () => {
+  const violations: Error[] = [];
+  const { adapter, coordinator } = makeCoordinator({ violations });
+  const signal = new AbortController();
+  const cancelled = coordinator.render("environment", request, signal.signal);
+  const peer = coordinator.render("environment", request);
+  await startGeneration(adapter, coordinator, 0);
+  await waitFor(() => adapter.renders.length === 2);
+  signal.abort();
+  await assert.rejects(cancelled, PageRequestCancellationError);
+  coordinator.didFailToRenderPage(adapter.renders[0].renderID, "late route failure");
+  coordinator.didRenderPage(adapter.renders[1].renderID, 200, "", "");
+  assert.equal((await peer).status, 200);
+  assert.equal(violations.length, 0);
+  assert.equal(coordinator.pendingRenderCount, 0);
+  assert.equal(adapter.released.length, 0);
+});
+
+test("cancelled work still expires under the existing runtime deadline", async () => {
+  const { adapter, coordinator, deadlines } = makeCoordinator();
+  const signal = new AbortController();
+  const cancelled = coordinator.render("environment", request, signal.signal);
+  await startGeneration(adapter, coordinator, 0);
+  await waitFor(() => adapter.renders.length === 1);
+  signal.abort();
+  await assert.rejects(cancelled, PageRequestCancellationError);
+  deadlines.expireNextActive();
+  assert.equal(coordinator.pendingRenderCount, 0);
+  assert.equal(adapter.released.length, 1);
 });
 
 test("unknown duplicate completion terminates the owning generation", async () => {

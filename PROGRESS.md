@@ -1,0 +1,6 @@
+# Progress
+- [x] SSR-ISOLATION Request-local cancellation retains bounded in-flight work and callback ownership; 23 coordinator and8 registry tests pass, including4 red-to-green regressions, shared cold start, capacity, retirement, late failure and deadline cleanup; focused strict TypeScript passes. Reviewed coherent commit: Isolate Page caller cancellation from shared runtimes `depends:none` `parallel:none`
+- [ ] SSR-DIAGNOSTICS Preserve bounded, request-correlated internal failure diagnostics without exposing details in HTTP responses or changing Actor error categories `depends:SSR-ISOLATION` `parallel:none`
+  - [ ] SSR-DIAGNOSTICS.1 Define the Embedded-safe diagnostic boundary and add behavioral failure checks `depends:SSR-ISOLATION` `parallel:none`
+  - [ ] SSR-DIAGNOSTICS.2 Implement diagnostic ownership, verify actual failure paths and review/commit `depends:SSR-DIAGNOSTICS.1` `parallel:none`
+- [ ] SSR-INTEGRATION Verify cumulative TypeScript and supported Swift/Embedded runtime paths, unchanged SSR/error response contracts and repository state; push only task commits to the existing upstream, without release/deployment/data changes `depends:SSR-ISOLATION,SSR-DIAGNOSTICS` `parallel:none`
